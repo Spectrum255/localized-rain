@@ -1,0 +1,19 @@
+{
+  "localizedrain.configuration.title": "Localized rain Configs",
+  "localizedrain.configuration.section.localizedrain.common.toml": "Localized rain Configs",
+  "localizedrain.configuration.section.localizedrain.common.toml.title": "Localized rain Configs",
+  "localizedrain.configuration.minClearTicks": "Minimum clear weather duration (ticks)",
+  "localizedrain.configuration.maxClearTicks": "Maximum clear weather duration (ticks)",
+  "localizedrain.configuration.minRainTicks": "Minimum rain duration (ticks)",
+  "localizedrain.configuration.maxRainTicks": "Maximum rain duration (ticks)",
+  "localizedrain.configuration.minThunderDelayTicks": "Minimum delay between thunderstorms (ticks)",
+  "localizedrain.configuration.maxThunderDelayTicks": "Maximum delay between thunderstorms (ticks)",
+  "localizedrain.configuration.minThunderTicks": "Minimum thunderstorm duration (ticks)",
+  "localizedrain.configuration.maxThunderTicks": "Maximum thunderstorm duration (ticks)",
+  "commands.localizedrain.weather.set.clear": "Set clear weather for %s biome patch(es)",
+  "commands.localizedrain.weather.set.rain": "Set rain for %s biome patch(es)",
+  "commands.localizedrain.weather.set.thunder": "Set thunderstorms for %s biome patch(es)",
+  "commands.localizedrain.weather.area.too_large": "The selected area needs %s sample positions; the maximum is %s",
+  "commands.localizedrain.weather.area.too_many": "The selected area covers %s biome patch(es); the maximum is %s",
+  "commands.localizedrain.weather.unsupported_dimension": "This dimension has no weather"
+}

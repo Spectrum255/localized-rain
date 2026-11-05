@@ -1,0 +1,32 @@
+已完成针对两个问题的代码修复，并确认当前机制：
+
+- 天气状态按“生物群系 ID”保存，不是按连续区域保存。
+  - `/weather rain`：执行者所在生物群系。
+  - `at`：目标坐标所在生物群系。
+  - `area`：范围内采样到的所有生物群系，之后这些群系在整个维度内共享状态。
+  - `global`：当前维度可能生成的全部生物群系。
+
+本次修改：
+
+- [LevelWeatherMixin.java](D:/minecraft%20mod/Localized%20rain/src/main/java/com/spectrum255/localizedrain/mixin/LevelWeatherMixin.java:14)
+  - `isRainingAt` 现在始终使用目标坐标所在生物群系的天气。
+  - 修复了“其他生物群系下雨时，晴天生物群系仍被判定为下雨”的问题，亡灵生物着火、火焰熄灭、农作物和其他原版降雨逻辑会按局部天气判断。
+
+- [BiomeWeatherManager.java](D:/minecraft%20mod/Localized%20rain/src/main/java/com/spectrum255/localizedrain/weather/BiomeWeatherManager.java:127)
+  - 移除了客户端 `START_RAINING` / `STOP_RAINING` 包。
+  - 这些包会把客户端雨量直接设为 `1` 或 `0`，导致跨生物群系时天空瞬间跳变。
+  - 现在只发送渐变雨量和雷暴强度，客户端会平滑过渡。
+
+雷击方面，现有实现已经将最终落点限制为：
+
+```java
+BiomeWeatherManager.isThunderingAt(level, pos)
+```
+
+因此雷暴状态不会在晴天生物群系实际落雷。原版的雷击尝试条件仍使用维度级 `isThundering()`，这只会增加无效尝试，不会让晴天区域真正落雷；原版雷击概率本身约为每区块每 tick `1/100000`，所以短时间内看不到落雷是正常现象。
+
+验证结果：
+
+- 项目资源静态校验通过：无错误、无警告。
+- 托管构建仍被 `maven.neoforged.net` 下载 `neoform-runtime:2.0.31` 超时阻塞，尚未完成源码编译。
+- 因构建未完成，本轮没有生成新的可验证 JAR，也没有启动游戏做画面验收。

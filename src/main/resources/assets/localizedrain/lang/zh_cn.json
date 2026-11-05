@@ -1,0 +1,19 @@
+{
+  "localizedrain.configuration.title": "局部有雨配置",
+  "localizedrain.configuration.section.localizedrain.common.toml": "局部有雨配置",
+  "localizedrain.configuration.section.localizedrain.common.toml.title": "局部有雨配置",
+  "localizedrain.configuration.minClearTicks": "晴天最短持续时间（tick）",
+  "localizedrain.configuration.maxClearTicks": "晴天最长持续时间（tick）",
+  "localizedrain.configuration.minRainTicks": "降雨最短持续时间（tick）",
+  "localizedrain.configuration.maxRainTicks": "降雨最长持续时间（tick）",
+  "localizedrain.configuration.minThunderDelayTicks": "两次雷暴之间最短间隔（tick）",
+  "localizedrain.configuration.maxThunderDelayTicks": "两次雷暴之间最长间隔（tick）",
+  "localizedrain.configuration.minThunderTicks": "雷暴最短持续时间（tick）",
+  "localizedrain.configuration.maxThunderTicks": "雷暴最长持续时间（tick）",
+  "commands.localizedrain.weather.set.clear": "已将 %s 片生物群系范围设为晴天",
+  "commands.localizedrain.weather.set.rain": "已将 %s 片生物群系范围设为降雨",
+  "commands.localizedrain.weather.set.thunder": "已将 %s 片生物群系范围设为雷暴",
+  "commands.localizedrain.weather.area.too_large": "所选区域需要检查 %s 个位置，上限为 %s",
+  "commands.localizedrain.weather.area.too_many": "所选区域覆盖 %s 片生物群系范围，上限为 %s",
+  "commands.localizedrain.weather.unsupported_dimension": "该维度没有天气"
+}

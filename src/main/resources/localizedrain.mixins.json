@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "package": "com.spectrum255.localizedrain.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "LevelWeatherMixin",
+    "ServerLevelWeatherMixin",
+    "EntitySkyLightMixin",
+    "MonsterSpawnMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}
