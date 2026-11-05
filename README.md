@@ -62,5 +62,7 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 
 ## 许可
 
-All Rights Reserved（见 `gradle.properties` 的 `mod_license`）。
+GNU General Public License v3.0（GPL-3.0-only），全文见仓库根目录的 `LICENSE`。
+`gradle.properties` 的 `mod_license` 同为 `GPL-3.0-only`，会写入构建产物的 `neoforge.mods.toml`。
+
 本仓库不包含 Xaero's Minimap / XaeroLib 的 jar，也不包含任何第三方模组的二进制文件。
