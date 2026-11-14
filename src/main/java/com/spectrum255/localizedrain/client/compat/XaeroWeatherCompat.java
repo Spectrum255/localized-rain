@@ -132,7 +132,11 @@ public final class XaeroWeatherCompat {
                 Object state = findMethod(infoDisplayClass, "getEffectiveState").invoke(display);
                 if (Boolean.TRUE.equals(state)) {
                     Component line = null;
-                    if (ClientWeatherTargets.isThundering()) {
+                    String typeKey = ClientWeatherTargets.typeKey();
+                    if (!typeKey.isEmpty()) {
+                        // 自定义天气类型（例如附属模组的沙尘暴）自带显示键
+                        line = Component.translatable(typeKey);
+                    } else if (ClientWeatherTargets.isThundering()) {
                         line = Component.translatable("gui.xaero_weather_thundering");
                     } else if (ClientWeatherTargets.isRaining()) {
                         line = Component.translatable("gui.xaero_weather_raining");
@@ -148,6 +152,7 @@ public final class XaeroWeatherCompat {
     }
 
     /** Builder 的 destination：把构造好的显示交给 InfoDisplayManager.add。 */
+    @SuppressWarnings("unchecked")
     private static Consumer<Object> createDestinationProxy(Class<?> managerClass, Object manager) {
         InvocationHandler handler = (proxy, method, args) -> {
             if (method.getDeclaringClass() == Object.class) {

@@ -17,7 +17,7 @@ public final class ClientWeatherHooks {
     /** 已经确认 Xaero 不可用（没装或版本不匹配），不再重复尝试。 */
     private static boolean unavailable;
     private static int ticks;
-    /** 上一次看到的维度；跨维度时清空残留的目标天气（下界/末地没有天光天气）。 */
+    /** 上一次看到的维度；跨维度时清空残留的目标天气，等待新维度重新推送。 */
     private static ResourceKey<Level> lastDimension;
 
     private ClientWeatherHooks() {}

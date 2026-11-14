@@ -2,6 +2,7 @@ package com.spectrum255.localizedrain.mixin;
 
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.monster.Monster;
 import net.minecraft.world.level.LightLayer;
@@ -31,8 +32,13 @@ public abstract class MonsterSpawnMixin {
             callback.setReturnValue(false);
             return;
         }
-        boolean thundering = WeatherManager.isThunderingRegionAt(level.getLevel(), pos);
-        int brightness = thundering ? level.getMaxLocalRawBrightness(pos, 10) : level.getMaxLocalRawBrightness(pos);
+        ServerLevel serverLevel = level.getLevel();
+        boolean thundering = WeatherManager.isThunderingRegionAt(serverLevel, pos);
+        // 非雷暴时用该位置所在区域的局部天空变暗值：维度级雨量取的是所有区域的最大值，
+        // 直接用它会让晴天区域也被按雨天变暗，从而虚增刷怪
+        int brightness = thundering
+                ? level.getMaxLocalRawBrightness(pos, 10)
+                : level.getMaxLocalRawBrightness(pos, WeatherManager.skyDarkenAt(serverLevel, pos));
         callback.setReturnValue(brightness <= dimensionType.monsterSpawnLightTest().sample(random));
     }
 }
