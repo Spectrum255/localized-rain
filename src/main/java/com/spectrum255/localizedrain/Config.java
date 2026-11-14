@@ -55,12 +55,14 @@ public final class Config {
     /**
      * 段并查集父表的硬上限（每个维度）。父表会随探索过的段增长，
      * 超过上限时清理会收缩「无引用、无状态」的节点，并逐出对应列缓存。
+     * 默认值与 {@link #MAX_STORED_STATES}（4096）保持约 4× 的比例：
+     * 太高会让大世界探索后频繁触发第三遍批量收缩。
      */
     public static final ModConfigSpec.IntValue MAX_PARENT_ENTRIES =
             BUILDER.comment("Hard cap on stored biome-segment parent entries per dimension.",
                             "The parent map is pruned down to this size when it grows beyond it;",
                             "evicting a column makes it re-register on the next scan.")
-                    .defineInRange("maxParentEntries", 32768, 4096, 1000000);
+                    .defineInRange("maxParentEntries", 16384, 4096, 1000000);
 
     /** 每 tick 最多扫描多少个新的 16×16 列（3D 片探测）。 */
     public static final ModConfigSpec.IntValue MAX_COLUMN_SCANS_PER_TICK =

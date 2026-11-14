@@ -49,6 +49,10 @@ public final class BiomePatches {
     private static boolean warnedChainGuard;
     private static final int DEFAULT_COLUMN_SCANS_PER_TICK = 4;
     private static final long COLUMN_BUDGET_NANOS = 2_000_000L;
+    /** 一次扫描周期最多补扫的列数：间隔 20 tick 时默认 4×20=80 列，单轮可能造成 MSPT 尖峰，封顶 64。 */
+    private static final int MAX_SWEEP_SCANS = 64;
+    /** 一次扫描周期的耗时上限：按间隔放大后仍封顶 4ms，避免单轮冻结主线程过久。 */
+    private static final long MAX_SWEEP_NANOS = 4_000_000L;
     /** 兼容旧代码：子状态分隔符（3D 模型不再使用，仅用于解析旧 key）。 */
     public static final char SUB_STATE_SEPARATOR = '|';
     private static final String PATCH_PREFIX = "p3:";
@@ -71,13 +75,15 @@ public final class BiomePatches {
 
     /**
      * 为一次扫描周期重置列扫描预算：结算间隔是 {@code ticks} 个 tick，
-     * 因此预算按间隔放大，否则扫描间隔越长、冷启动补列越慢（默认 20 tick 时每轮可补 80 列）。
+     * 因此预算按间隔放大，否则扫描间隔越长、冷启动补列越慢。
+     * 放大同时设上限（{@link #MAX_SWEEP_SCANS} 列 / {@link #MAX_SWEEP_NANOS}），
+     * 避免间隔变大后单轮一次补太多列，造成 MSPT 尖峰。
      */
     public static void beginSweep(ServerLevel level, int ticks) {
         TickBudget budget = BUDGETS.computeIfAbsent(level, ignored -> new TickBudget());
         int span = Math.max(1, ticks);
-        budget.scanLimit = maxColumnScansPerTick() * span;
-        budget.nanoLimit = Math.min(COLUMN_BUDGET_NANOS * span, 8_000_000L);
+        budget.scanLimit = Math.min(maxColumnScansPerTick() * span, MAX_SWEEP_SCANS);
+        budget.nanoLimit = Math.min(COLUMN_BUDGET_NANOS * span, MAX_SWEEP_NANOS);
         budget.scans = 0;
         budget.nanos = 0L;
     }

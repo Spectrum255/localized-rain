@@ -188,6 +188,7 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 - `docs/localizedrain-0.4.8-fixes.md`：清理被引用保护、线性清理、LRU 顺序与版本门控
 - `docs/localizedrain-0.4.9-fixes.md`：父表环检测、清理降分配与降级行为统一
 - `docs/localizedrain-0.4.11-fixes.md`：父表硬上限、批量扫描预算、快照清理与死代码移除
+- `docs/localizedrain-0.4.12-fixes.md`：父表背压、逐出配额、扫描预算上限与兼容性说明
 - `localizedrain-0.4.4-变更记录.md`：另一个 agent 的改动记录（工作区根）
 
 ## 许可

@@ -48,8 +48,19 @@ public final class WeatherData extends SavedData {
     private List<String> removableScratch = new ArrayList<>();
     private Set<String> seenScratch = new HashSet<>();
     private List<String> pathScratch = new ArrayList<>();
-    /** 父链超过上限只警告一次，避免损坏存档每 tick 刷屏。 */
+    /** 父链损坏（成环/悬空）只警告一次，避免损坏存档每 tick 刷屏。 */
     private boolean warnedChainGuard;
+    /** 父表仍超硬上限只警告一次；与父链损坏的警告分开，避免前者吞掉后者。 */
+    private boolean warnedParentLimit;
+    /**
+     * 收缩失败（例如整个分量是一条长链，除根外都被引用）时记录当时的父表大小。
+     * 父表要再增长一截才值得重试，否则每次清理都要全表重扫一遍。
+     */
+    private int parentPruneBlockedAt;
+    /** 第三遍收缩时单轮最多逐出的列数，避免下一轮扫描一次补太多列。 */
+    private static final int MAX_EVICTIONS_PER_PRUNE = 256;
+    /** 背压重试阈值：父表相对上次失败再增长 1/8（至少 2048 条）才重试。 */
+    private static final int PARENT_PRUNE_RETRY_DIVISOR = 8;
 
     public static SavedData.Factory<WeatherData> factory() {
         return new SavedData.Factory<>(WeatherData::new, WeatherData::load);
@@ -83,6 +94,11 @@ public final class WeatherData extends SavedData {
             }
         }
         data.sanitizeParents();
+        // 父表只服务于 p3: 天气状态。读档后没有任何状态时（旧存档、状态全过期、切换版本），
+        // 保留父表只会白占内存并拖到硬上限，直接清空。
+        if (data.weatherByPatch.isEmpty()) {
+            data.segmentParents.clear();
+        }
         return data;
     }
 
@@ -294,8 +310,19 @@ public final class WeatherData extends SavedData {
                                  java.util.function.Predicate<String> columnStillCached,
                                  java.util.function.Predicate<String> evictColumn) {
         int limit = Math.max(4096, maxParentEntries);
-        if (this.segmentParents.size() <= limit) {
+        int size = this.segmentParents.size();
+        if (size == 0) {
             return false;
+        }
+        boolean overLimit = size > limit;
+        // 背压：上次收缩失败后，父表要再增长一截才重试，否则每次清理都要全表重扫。
+        if (overLimit && this.parentPruneBlockedAt > 0) {
+            int retryAt = this.parentPruneBlockedAt
+                    + Math.max(2048, limit / PARENT_PRUNE_RETRY_DIVISOR);
+            if (size < retryAt) {
+                return false;
+            }
+            this.parentPruneBlockedAt = 0;
         }
         Map<String, String> roots = this.rootScratch;
         List<String> removable = this.removableScratch;
@@ -305,15 +332,17 @@ public final class WeatherData extends SavedData {
         referenced.clear();
         boolean changed = false;
 
-        // 第一遍：成环/悬空损坏链整链删除。损坏节点即使被别的条目引用也要删，
+        // 第一遍（仅超上限时）：成环/悬空损坏链整链删除。损坏节点即使被别的条目引用也要删，
         // 否则「被引用就保留」会让环永远清不掉。
-        for (String node : this.segmentParents.keySet()) {
-            if (this.resolveRootMemo(node, roots) == null) {
-                removable.add(node);
+        if (overLimit) {
+            for (String node : this.segmentParents.keySet()) {
+                if (this.resolveRootMemo(node, roots) == null) {
+                    removable.add(node);
+                }
             }
+            changed |= this.removeNodes(removable, evictColumn) > 0;
+            roots.clear();
         }
-        changed |= this.removeNodes(removable, evictColumn);
-        roots.clear();
 
         // 第二遍：重建「被引用」集合，被别的条目当作父节点的节点一律保留。
         // 否则仍缓存、不会重新注册的列会指向悬空父项，canonical 在中间节点停住，天气被读成晴天。
@@ -338,15 +367,23 @@ public final class WeatherData extends SavedData {
                 removable.add(node);
             }
         }
-        changed |= this.removeNodes(removable, evictColumn);
+        changed |= this.removeNodes(removable, evictColumn) > 0;
         roots.clear();
 
-        // 第三遍：仍超过硬上限时收缩。只删「没有子条目、没有天气状态」的节点，并逐出它们所在的列——
-        // 列缓存命中时这些节点不会重新注册，正是父表被撑大的原因。
+        // 第三遍（仅超上限时）：收缩。只删「没有子条目、没有天气状态」的节点，并逐出它们所在的列——
+        // 列缓存命中时这些节点不会重新注册，正是父表被撑大的原因。每轮最多逐出
+        // MAX_EVICTIONS_PER_PRUNE 列，否则下一轮扫描要一次补几百列，造成短期卡顿。
+        int evicted = 0;
         int passes = 0;
-        while (this.segmentParents.size() > limit && passes++ < 4) {
+        while (this.segmentParents.size() > limit && passes++ < 4
+                && evicted < MAX_EVICTIONS_PER_PRUNE) {
             this.rebuildReferenced(referenced);
+            int budget = MAX_EVICTIONS_PER_PRUNE - evicted;
             for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
+                if (removable.size() >= budget
+                        || this.segmentParents.size() - removable.size() <= limit) {
+                    break;
+                }
                 String node = entry.getKey();
                 if (referenced.contains(node) || this.weatherByPatch.containsKey(node)) {
                     continue;
@@ -356,15 +393,22 @@ public final class WeatherData extends SavedData {
             if (removable.isEmpty()) {
                 break;
             }
-            changed |= this.removeNodes(removable, evictColumn);
+            int removed = this.removeNodes(removable, evictColumn);
+            evicted += removed;
+            changed |= removed > 0;
         }
         if (this.segmentParents.size() > limit) {
-            if (!this.warnedChainGuard) {
-                this.warnedChainGuard = true;
+            // 整个分量是一条长链/大网时，除根外全是「被引用」节点，第三遍删不动。
+            // 记录当前规模，等父表再增长一截后才重试，避免每次 prune 都做无用功。
+            this.parentPruneBlockedAt = this.segmentParents.size();
+            if (!this.warnedParentLimit) {
+                this.warnedParentLimit = true;
                 LOGGER.warn("Segment parent map is still above its hard limit ({} > {}) after pruning; "
-                        + "keeping the remaining structure to avoid dropping live weather states",
+                        + "will retry after it grows further",
                         this.segmentParents.size(), limit);
             }
+        } else {
+            this.parentPruneBlockedAt = 0;
         }
 
         // 本轮结束：清空引用并释放临时集合的容量（父表已缩到阈值一半以下时）
@@ -383,17 +427,21 @@ public final class WeatherData extends SavedData {
         return changed;
     }
 
-    /** 从父表删除给定节点，并把它们所在的列逐出列缓存（让下一次扫描重新注册）。 */
-    private boolean removeNodes(List<String> nodes, java.util.function.Predicate<String> evictColumn) {
-        boolean changed = false;
+    /**
+     * 从父表删除给定节点，并把它们所在的列逐出列缓存（让下一次扫描重新注册）。
+     *
+     * @return 实际删除的节点数
+     */
+    private int removeNodes(List<String> nodes, java.util.function.Predicate<String> evictColumn) {
+        int removed = 0;
         for (String node : nodes) {
             if (this.segmentParents.remove(node) != null) {
-                changed = true;
+                removed++;
                 evictColumn.test(node);
             }
         }
         nodes.clear();
-        return changed;
+        return removed;
     }
 
     /** 重建「被别的条目当作父节点」的节点集合。 */
