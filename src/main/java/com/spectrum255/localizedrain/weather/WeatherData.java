@@ -28,18 +28,13 @@ import org.slf4j.LoggerFactory;
 public final class WeatherData extends SavedData {
     private static final Logger LOGGER = LoggerFactory.getLogger(WeatherData.class);
     public static final String FILE_ID = "localizedrain_weather";
-    private static final int DATA_VERSION = 10;
+    /** 0.4.11 起不再保存退化方格（{@code g:}）父表；旧存档里的该字段会被忽略。 */
+    private static final int DATA_VERSION = 11;
 
-    /** 当前存档 key 的格式前缀（3D 段 key；子状态 key 也以它开头）。 */
+    /** 当前存档 key 的格式前缀（3D 段 key）。 */
     private static final String PATCH_KEY_PREFIX = "p3:";
 
     private final Map<String, WeatherState> weatherByPatch = new HashMap<>();
-    /**
-     * 退化方格（{@code g:}）的并查集父指针：bucket -> parent。
-     * 超大群系会退化成一格格 1024 方块，这里把相邻的同群系方格合并成一组共享天气，
-     * 避免「同一条相连区域在坐标边界处天气突然中断」。持久化保证跨重启 key 稳定。
-     */
-    private final Map<Long, Long> fallbackParents = new HashMap<>();
     /**
      * 3D 片（{@code p3:}）的并查集父指针：段节点 -> parent。
      * 相邻列的同群系段在 Y 方向相接时合并，片 = 3D 连通分量。持久化保证跨重启 key 稳定。
@@ -47,10 +42,12 @@ public final class WeatherData extends SavedData {
     private final Map<String, String> segmentParents = new HashMap<>();
 
     // 清理父表时复用的临时集合：父表可能十几万条，每轮重新分配会制造数 MB 垃圾。
-    private final Set<String> referencedScratch = new HashSet<>();
-    private final Map<String, String> rootScratch = new HashMap<>();
-    private final List<String> removableScratch = new ArrayList<>();
-    private final Set<String> seenScratch = new HashSet<>();
+    // 清理结束后若父表已明显缩小，会整体替换成小集合，释放上一轮留下的容量。
+    private Set<String> referencedScratch = new HashSet<>();
+    private Map<String, String> rootScratch = new HashMap<>();
+    private List<String> removableScratch = new ArrayList<>();
+    private Set<String> seenScratch = new HashSet<>();
+    private List<String> pathScratch = new ArrayList<>();
     /** 父链超过上限只警告一次，避免损坏存档每 tick 刷屏。 */
     private boolean warnedChainGuard;
 
@@ -76,11 +73,6 @@ public final class WeatherData extends SavedData {
             }
             data.weatherByPatch.put(patch, WeatherState.load(entry));
         }
-        ListTag parents = tag.getList("fallback_parents", Tag.TAG_COMPOUND);
-        for (int index = 0; index < parents.size(); index++) {
-            CompoundTag entry = parents.getCompound(index);
-            data.fallbackParents.put(entry.getLong("bucket"), entry.getLong("parent"));
-        }
         ListTag segments = tag.getList("segment_parents", Tag.TAG_COMPOUND);
         for (int index = 0; index < segments.size(); index++) {
             CompoundTag entry = segments.getCompound(index);
@@ -90,18 +82,8 @@ public final class WeatherData extends SavedData {
                 data.segmentParents.put(node, parent);
             }
         }
-        if (!data.fallbackParents.isEmpty()
-                && data.weatherByPatch.keySet().stream().noneMatch(key -> key.startsWith("g:"))) {
-            // 0.4.5 起已不再读取 g: key；小存档里旧的退化方格父表没有清理触发点，读档时直接丢弃。
-            data.fallbackParents.clear();
-        }
         data.sanitizeParents();
         return data;
-    }
-
-    /** 退化方格并查集的父指针（可变，由 {@link BiomePatches} 维护并持久化）。 */
-    Map<Long, Long> fallbackParents() {
-        return this.fallbackParents;
     }
 
     /** 3D 段并查集的父指针（可变，由 {@link BiomePatches} 维护并持久化）。 */
@@ -109,18 +91,18 @@ public final class WeatherData extends SavedData {
         return this.segmentParents;
     }
 
-    /** 只读查询，没有记录返回 null。退化方格会沿并查集解析到所在组的规范 key。 */
+    /** 只读查询，没有记录返回 null。3D 段会沿并查集解析到所在分量的规范 key。 */
     public WeatherState get(String patch) {
         WeatherState state = this.weatherByPatch.get(patch);
         if (state != null) {
             return state;
         }
-        String canonical = this.canonicalFallback(patch);
+        String canonical = this.canonical(patch);
         return canonical.equals(patch) ? null : this.weatherByPatch.get(canonical);
     }
 
     public WeatherState getOrCreate(String patch, RandomSource random) {
-        String canonical = this.canonicalFallback(patch);
+        String canonical = this.canonical(patch);
         WeatherState state = this.weatherByPatch.get(canonical);
         if (state != null) {
             return state;
@@ -132,10 +114,10 @@ public final class WeatherData extends SavedData {
     }
 
     /**
-     * 两个退化方组合并时，把被吸收方的天气状态迁移到新的规范 key。
+     * 两个段分量合并时，把被吸收方的天气状态迁移到新的规范 key。
      * 双方都有状态时保留规范 key 那份（结果确定，便于跨重启复现）。
      */
-    void transferFallbackState(String from, String to) {
+    void transferState(String from, String to) {
         if (from.equals(to)) {
             return;
         }
@@ -147,55 +129,13 @@ public final class WeatherData extends SavedData {
         this.setDirty();
     }
 
-    /** 把 {@code p3:} / {@code g:} key 解析成所在分量的规范 key；其它 key 原样返回。 */
-    private String canonicalFallback(String patch) {
+    /** 把 {@code p3:} key 解析成所在分量的规范 key；其它 key 原样返回。 */
+    private String canonical(String patch) {
         if (patch == null) {
             return null;
         }
         String segmentRoot = this.canonicalSegment(patch);
-        if (segmentRoot != null) {
-            return segmentRoot;
-        }
-        if (!patch.startsWith("g:") || this.fallbackParents.isEmpty()) {
-            return patch;
-        }
-        int comma = patch.indexOf(',');
-        if (comma < 0) {
-            return patch;
-        }
-        long bucket;
-        try {
-            bucket = net.minecraft.world.level.ChunkPos.asLong(
-                    Integer.parseInt(patch.substring(2, comma).trim()),
-                    Integer.parseInt(patch.substring(comma + 1).trim()));
-        } catch (NumberFormatException exception) {
-            return patch;
-        }
-        Long parent = this.fallbackParents.get(bucket);
-        if (parent == null) {
-            return patch;
-        }
-        long root = bucket;
-        boolean terminated = false;
-        int guard = 0;
-        while (guard++ < BiomePatches.MAX_PARENT_CHAIN) {
-            Long next = this.fallbackParents.get(root);
-            if (next == null || next == root) {
-                terminated = true;
-                break;
-            }
-            root = next;
-        }
-        if (!terminated || root == bucket) {
-            if (!terminated && !this.warnedChainGuard) {
-                this.warnedChainGuard = true;
-                LOGGER.warn("Degraded-grid parent chain exceeded {} steps while resolving {}; "
-                        + "treating the node as its own root. The parent map may be corrupted",
-                        BiomePatches.MAX_PARENT_CHAIN, patch);
-            }
-            return patch;
-        }
-        return "g:" + net.minecraft.world.level.ChunkPos.getX(root) + "," + net.minecraft.world.level.ChunkPos.getZ(root);
+        return segmentRoot == null ? patch : segmentRoot;
     }
 
     /** 沿 3D 段并查集解析到规范 key；不是段 key 或没有记录时返回 null。 */
@@ -209,16 +149,19 @@ public final class WeatherData extends SavedData {
         }
         String root = patch;
         int guard = 0;
+        int limit = this.segmentParents.size() + 1;
         String next = this.segmentParents.get(root);
         while (next != null && !next.equals(root)) {
-            if (guard++ >= BiomePatches.MAX_PARENT_CHAIN) {
-                // 父指针损坏（环或超长链）：按原 key 处理（与 BiomePatches.canonical 的降级一致），
-                // 读到的是该 key 自己的状态；下次合并/清理会重建分量。
+            if (guard++ >= limit) {
+                // 父指针成环（超长合法链不受限制）：把该节点隔离成自映射根，
+                // 这样下一次解析只需一步，不会每次都重走整条坏链。
+                this.segmentParents.put(patch, patch);
+                this.setDirty();
                 if (!this.warnedChainGuard) {
                     this.warnedChainGuard = true;
-                    LOGGER.warn("Segment parent chain exceeded {} steps while resolving {}; "
-                            + "treating the node as its own root. The parent map may be corrupted",
-                            BiomePatches.MAX_PARENT_CHAIN, patch);
+                    LOGGER.warn("Segment parent chain did not terminate within {} steps while resolving {}; "
+                            + "isolating the node. The parent map may be corrupted",
+                            limit, patch);
                 }
                 return patch;
             }
@@ -315,7 +258,8 @@ public final class WeatherData extends SavedData {
      * 从未被推进过（{@code lastTick == 0}）的旧存档条目只受条数上限约束，不会被时间清理误删。
      */
     public void prune(long gameTime, int maxEntries, long retentionTicks,
-                      java.util.function.Predicate<String> columnStillCached) {
+                      int maxParentEntries, java.util.function.Predicate<String> columnStillCached,
+                      java.util.function.Predicate<String> evictColumn) {
         int before = this.weatherByPatch.size();
         if (retentionTicks > 0L) {
             this.weatherByPatch.entrySet().removeIf(entry -> {
@@ -324,56 +268,56 @@ public final class WeatherData extends SavedData {
             });
         }
         if (this.weatherByPatch.size() > maxEntries) {
+            // 超限时优先淘汰「列已不在缓存」的片（多半在未加载区域，重新扫描会重建晴天周期），
+            // 让仍加载、每轮都会被推进的片尽量留在存档里。
             List<String> keys = new ArrayList<>(this.weatherByPatch.keySet());
-            keys.sort(Comparator.comparingLong(key -> this.weatherByPatch.get(key).lastTick));
+            keys.sort(Comparator
+                    .comparingInt((String key) -> columnStillCached.test(key) ? 1 : 0)
+                    .thenComparingLong(key -> this.weatherByPatch.get(key).lastTick));
             int excess = this.weatherByPatch.size() - maxEntries;
             for (int index = 0; index < excess; index++) {
                 this.weatherByPatch.remove(keys.get(index));
             }
         }
-        boolean parentsChanged = this.pruneParents(maxEntries, columnStillCached);
+        boolean parentsChanged = this.pruneParents(maxParentEntries, columnStillCached, evictColumn);
         if (this.weatherByPatch.size() != before || parentsChanged) {
             this.setDirty();
         }
     }
 
     /**
-     * 清理并查集父表里已经没有对应天气状态的分量，避免探索过的段无限累积。
-     * 只在父表明显大于状态表时才扫描，避免每次清理都做全量遍历。
+     * 清理并查集父表：先删损坏链，再删「列已淘汰且分量根没有天气状态」的节点；
+     * 仍然超过硬上限时，从「未被引用、没有状态」的节点开始收缩，并把它们所在的列逐出缓存，
+     * 让这些列在下一次扫描时重新注册/合并。硬上限保证父表不会随探索无限增长。
      */
-    private boolean pruneParents(int maxEntries, java.util.function.Predicate<String> columnStillCached) {
-        int limit = Math.max(1024, maxEntries * 4);
+    private boolean pruneParents(int maxParentEntries,
+                                 java.util.function.Predicate<String> columnStillCached,
+                                 java.util.function.Predicate<String> evictColumn) {
+        int limit = Math.max(4096, maxParentEntries);
         if (this.segmentParents.size() <= limit) {
             return false;
         }
         Map<String, String> roots = this.rootScratch;
         List<String> removable = this.removableScratch;
+        Set<String> referenced = this.referencedScratch;
         roots.clear();
         removable.clear();
+        referenced.clear();
+        boolean changed = false;
 
-        // 第一遍：成环/超长链属于损坏结构，整链删除。损坏节点即使被别的条目引用也要删，
+        // 第一遍：成环/悬空损坏链整链删除。损坏节点即使被别的条目引用也要删，
         // 否则「被引用就保留」会让环永远清不掉。
         for (String node : this.segmentParents.keySet()) {
             if (this.resolveRootMemo(node, roots) == null) {
                 removable.add(node);
             }
         }
-        for (String node : removable) {
-            this.segmentParents.remove(node);
-        }
-        boolean changed = !removable.isEmpty();
-        removable.clear();
+        changed |= this.removeNodes(removable, evictColumn);
+        roots.clear();
 
         // 第二遍：重建「被引用」集合，被别的条目当作父节点的节点一律保留。
         // 否则仍缓存、不会重新注册的列会指向悬空父项，canonical 在中间节点停住，天气被读成晴天。
-        Set<String> referenced = this.referencedScratch;
-        referenced.clear();
-        for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
-            if (!entry.getKey().equals(entry.getValue())) {
-                referenced.add(entry.getValue());
-            }
-        }
-        roots.clear();
+        this.rebuildReferenced(referenced);
         for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
             String node = entry.getKey();
             if (referenced.contains(node)) {
@@ -394,23 +338,79 @@ public final class WeatherData extends SavedData {
                 removable.add(node);
             }
         }
-        for (String node : removable) {
-            this.segmentParents.remove(node);
-            changed = true;
+        changed |= this.removeNodes(removable, evictColumn);
+        roots.clear();
+
+        // 第三遍：仍超过硬上限时收缩。只删「没有子条目、没有天气状态」的节点，并逐出它们所在的列——
+        // 列缓存命中时这些节点不会重新注册，正是父表被撑大的原因。
+        int passes = 0;
+        while (this.segmentParents.size() > limit && passes++ < 4) {
+            this.rebuildReferenced(referenced);
+            for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
+                String node = entry.getKey();
+                if (referenced.contains(node) || this.weatherByPatch.containsKey(node)) {
+                    continue;
+                }
+                removable.add(node);
+            }
+            if (removable.isEmpty()) {
+                break;
+            }
+            changed |= this.removeNodes(removable, evictColumn);
         }
-        if (!this.fallbackParents.isEmpty()
-                && this.weatherByPatch.keySet().stream().noneMatch(key -> key.startsWith("g:"))) {
-            this.fallbackParents.clear();
-            changed = true;
+        if (this.segmentParents.size() > limit) {
+            if (!this.warnedChainGuard) {
+                this.warnedChainGuard = true;
+                LOGGER.warn("Segment parent map is still above its hard limit ({} > {}) after pruning; "
+                        + "keeping the remaining structure to avoid dropping live weather states",
+                        this.segmentParents.size(), limit);
+            }
+        }
+
+        // 本轮结束：清空引用并释放临时集合的容量（父表已缩到阈值一半以下时）
+        roots.clear();
+        referenced.clear();
+        removable.clear();
+        this.seenScratch.clear();
+        this.pathScratch.clear();
+        if (this.segmentParents.size() <= limit / 2) {
+            this.referencedScratch = new HashSet<>();
+            this.rootScratch = new HashMap<>();
+            this.removableScratch = new ArrayList<>();
+            this.seenScratch = new HashSet<>();
+            this.pathScratch = new ArrayList<>();
         }
         return changed;
+    }
+
+    /** 从父表删除给定节点，并把它们所在的列逐出列缓存（让下一次扫描重新注册）。 */
+    private boolean removeNodes(List<String> nodes, java.util.function.Predicate<String> evictColumn) {
+        boolean changed = false;
+        for (String node : nodes) {
+            if (this.segmentParents.remove(node) != null) {
+                changed = true;
+                evictColumn.test(node);
+            }
+        }
+        nodes.clear();
+        return changed;
+    }
+
+    /** 重建「被别的条目当作父节点」的节点集合。 */
+    private void rebuildReferenced(Set<String> referenced) {
+        referenced.clear();
+        for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
+            if (!entry.getKey().equals(entry.getValue())) {
+                referenced.add(entry.getValue());
+            }
+        }
     }
 
     /**
      * 沿父表解析到根，并在一次清理/读档范围内记忆化 + 路径压缩。
      * 父项缺失时返回当前节点（悬空），由调用方结合「根是否有状态」决定去留；
-     * 成环或超过 {@link BiomePatches#MAX_PARENT_CHAIN} 步时返回 {@code null}（损坏），
-     * 调用方据此整链丢弃，避免把中间节点误当成根、反而把环「修复」成合法结构。
+     * 成环时返回 {@code null}（损坏），调用方据此整链丢弃，避免把中间节点误当成根、
+     * 反而把环「修复」成合法结构。环检测依赖 seen 集合，不再使用固定长度上限。
      */
     private String resolveRootMemo(String node, Map<String, String> memo) {
         String known = memo.get(node);
@@ -419,11 +419,13 @@ public final class WeatherData extends SavedData {
         }
         Set<String> seen = this.seenScratch;
         seen.clear();
+        List<String> path = this.pathScratch;
+        path.clear();
         String current = node;
-        List<String> path = new ArrayList<>(8);
         String root = null;
         while (true) {
-            if (!seen.add(current) || path.size() >= BiomePatches.MAX_PARENT_CHAIN) {
+            if (!seen.add(current)) {
+                // 成环：seen 保证最多访问父表大小的不同节点，无需再做固定长度限制
                 break;
             }
             String parent = this.segmentParents.get(current);
@@ -493,14 +495,6 @@ public final class WeatherData extends SavedData {
             entries.add(entry);
         });
         tag.put("patches", entries);
-        ListTag parents = new ListTag();
-        this.fallbackParents.forEach((bucket, parent) -> {
-            CompoundTag entry = new CompoundTag();
-            entry.putLong("bucket", bucket);
-            entry.putLong("parent", parent);
-            parents.add(entry);
-        });
-        tag.put("fallback_parents", parents);
         ListTag segments = new ListTag();
         this.segmentParents.forEach((node, parent) -> {
             CompoundTag entry = new CompoundTag();

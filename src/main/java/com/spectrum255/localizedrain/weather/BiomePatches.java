@@ -44,12 +44,6 @@ public final class BiomePatches {
     private static final int SAMPLE_BLOCK_Y = 128;
     private static final int MAX_COLUMN_CACHE = 200_000;
     private static final int MAX_PATCH_BIOMES = 200_000;
-    /** 父链解析上限：合法链可能比 128 深得多（每次合并 +1），这里与父表容量同数量级。 */
-    /**
-     * 父链解析上限。合并按字典序取最小根，合法链会随合并次数线性加深，所以不能设得太小；
-     * 这里与父表容量同数量级，正常合并不会触达，只有父表损坏（成环/超长）才会命中。
-     */
-    public static final int MAX_PARENT_CHAIN = 32_768;
 
     /** 父链损坏警告只打一次，避免每 tick 刷屏。 */
     private static boolean warnedChainGuard;
@@ -69,6 +63,21 @@ public final class BiomePatches {
     /** 重置该维度本 tick 的列扫描预算；由 {@link WeatherManager#tick(ServerLevel)} 调用。 */
     public static void beginTick(ServerLevel level) {
         TickBudget budget = BUDGETS.computeIfAbsent(level, ignored -> new TickBudget());
+        budget.scanLimit = maxColumnScansPerTick();
+        budget.nanoLimit = COLUMN_BUDGET_NANOS;
+        budget.scans = 0;
+        budget.nanos = 0L;
+    }
+
+    /**
+     * 为一次扫描周期重置列扫描预算：结算间隔是 {@code ticks} 个 tick，
+     * 因此预算按间隔放大，否则扫描间隔越长、冷启动补列越慢（默认 20 tick 时每轮可补 80 列）。
+     */
+    public static void beginSweep(ServerLevel level, int ticks) {
+        TickBudget budget = BUDGETS.computeIfAbsent(level, ignored -> new TickBudget());
+        int span = Math.max(1, ticks);
+        budget.scanLimit = maxColumnScansPerTick() * span;
+        budget.nanoLimit = Math.min(COLUMN_BUDGET_NANOS * span, 8_000_000L);
         budget.scans = 0;
         budget.nanos = 0L;
     }
@@ -163,11 +172,17 @@ public final class BiomePatches {
             }
             return sampleBiomeAt(level, parsed[0], parsed[1], parsed[2] + SECTION_BLOCKS / 2);
         }
-        int[] cells = parseLegacyCells(patch);
-        return cells == null ? null : sampleBiomeAt(level, cells[0], cells[1], sampleBlockY(level));
+        // 旧 p:/g:/|biome key 从 0.4.11 起不再支持：载入时会被丢弃，扫描只会产生 p3: key。
+        return null;
     }
 
-    /** 旧 API：3D 模型下片大小不再按水平格统计，固定返回 0（保留签名供附属模组兼容）。 */
+    /**
+     * 旧 API：3D 模型下片大小不再按水平格统计，固定返回 0（保留签名供附属模组兼容）。
+     *
+     * @deprecated 3D 段模型没有「水平格数」的概念；片的大小取决于段在竖直方向的连通范围。
+     *             这里固定返回 0，调用方不应再依赖它做范围/密度估算。
+     */
+    @Deprecated
     public static int patchSize(ServerLevel level, String patch) {
         return 0;
     }
@@ -276,7 +291,7 @@ public final class BiomePatches {
         }
         TickBudget budget = BUDGETS.computeIfAbsent(level, ignored -> new TickBudget());
         if (budgeted) {
-            if (budget.scans >= maxColumnScansPerTick() || budget.nanos >= COLUMN_BUDGET_NANOS) {
+            if (budget.scans >= budget.scanLimit || budget.nanos >= budget.nanoLimit) {
                 return null;
             }
         }
@@ -398,21 +413,22 @@ public final class BiomePatches {
         Map<String, String> parents = WeatherManager.data(level).segmentParents();
         String root = node;
         int guard = 0;
+        int limit = parents.size() + 1;
         String next = parents.get(root);
-        while (next != null && !next.equals(root) && guard++ < MAX_PARENT_CHAIN) {
+        while (next != null && !next.equals(root) && guard++ < limit) {
             root = next;
             next = parents.get(root);
         }
         if (next != null && !next.equals(root)) {
-            // 父表损坏（成环/超长）：退化为按原节点处理，并只警告一次，避免静默把中间节点当根。
+            // 父表损坏（成环）：退化为按原节点处理，并只警告一次，避免静默把中间节点当根。
             // 把该节点写成自映射（隔离），否则每次查询都要重走一整条坏链。
             WeatherData parentData = WeatherManager.data(level);
             parentData.segmentParents().put(node, node);
             parentData.setDirty();
             if (!warnedChainGuard) {
                 warnedChainGuard = true;
-                LOGGER.warn("Segment parent chain exceeded {} steps while resolving {}; "
-                        + "treating the node as its own root. The parent map may be corrupted", MAX_PARENT_CHAIN, node);
+                LOGGER.warn("Segment parent chain did not terminate within {} steps while resolving {}; "
+                        + "treating the node as its own root. The parent map may be corrupted", limit, node);
             }
             return node;
         }
@@ -422,7 +438,7 @@ public final class BiomePatches {
         WeatherData data = WeatherManager.data(level);
         String cursor = node;
         int compressGuard = 0;
-        while (!cursor.equals(root) && compressGuard++ < MAX_PARENT_CHAIN) {
+        while (!cursor.equals(root) && compressGuard++ < limit) {
             String parent = parents.get(cursor);
             if (parent == null || parent.equals(cursor)) {
                 break;
@@ -446,7 +462,7 @@ public final class BiomePatches {
         String newRoot = compareNodes(rootA, rootB) <= 0 ? rootA : rootB;
         String oldRoot = newRoot.equals(rootA) ? rootB : rootA;
         parents.put(oldRoot, newRoot);
-        data.transferFallbackState(oldRoot, newRoot);
+        data.transferState(oldRoot, newRoot);
         PATCH_BIOMES.computeIfAbsent(level, ignored -> newBiomeCache()).put(newRoot, biome);
         data.setDirty();
         if (debugEnabled()) {
@@ -493,32 +509,6 @@ public final class BiomePatches {
         }
     }
 
-    /** 解析旧 key 里的格坐标：{@code p:<x>,<z>} / {@code g:<x>,<z>}。 */
-    private static int[] parseLegacyCells(String patch) {
-        if (patch == null || patch.length() < 5 || patch.charAt(1) != ':') {
-            return null;
-        }
-        boolean fallback;
-        if (patch.startsWith("p:")) {
-            fallback = false;
-        } else if (patch.startsWith("g:")) {
-            fallback = true;
-        } else {
-            return null;
-        }
-        int comma = patch.indexOf(',');
-        if (comma < 0) {
-            return null;
-        }
-        try {
-            int x = Integer.parseInt(patch.substring(2, comma).trim());
-            int z = Integer.parseInt(patch.substring(comma + 1).trim());
-            return new int[]{fallback ? x << 8 : x, fallback ? z << 8 : z};
-        } catch (NumberFormatException exception) {
-            return null;
-        }
-    }
-
     private static Column cachedColumn(ServerLevel level, int columnX, int columnZ) {
         Map<Long, Column> cache = COLUMNS.get(level);
         return cache == null ? null : cache.get(ChunkPos.asLong(columnX, columnZ));
@@ -538,6 +528,19 @@ public final class BiomePatches {
         // 用 containsKey 而不是 get：COLUMNS 是 accessOrder 的 LRU，清理时的大量检查不能刷新访问顺序
         Map<Long, Column> cache = COLUMNS.get(level);
         return cache != null && cache.containsKey(ChunkPos.asLong(parsed[0], parsed[1]));
+    }
+
+    /**
+     * 从列缓存里移除该片所在的列，使其在下一次扫描时重新注册/合并。
+     * 用于父表硬上限收缩：列缓存命中时对应节点不会重新写出，只能先逐出列。
+     */
+    public static boolean evictColumn(ServerLevel level, String patch) {
+        int[] parsed = parse3(patch);
+        if (parsed == null) {
+            return false;
+        }
+        Map<Long, Column> cache = COLUMNS.get(level);
+        return cache != null && cache.remove(ChunkPos.asLong(parsed[0], parsed[1])) != null;
     }
 
     private static int sampleBlockY(ServerLevel level) {
@@ -574,6 +577,10 @@ public final class BiomePatches {
     }
 
     private static final class TickBudget {
+        /** 本预算窗口内允许的列扫描次数；{@link #beginTick}/{@link #beginSweep} 会重置。 */
+        private int scanLimit = DEFAULT_COLUMN_SCANS_PER_TICK;
+        /** 本预算窗口内允许的扫描耗时上限（纳秒）。 */
+        private long nanoLimit = COLUMN_BUDGET_NANOS;
         private int scans;
         private long nanos;
     }

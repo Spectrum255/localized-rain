@@ -13,6 +13,7 @@
   "localizedrain.configuration.weatherBiomeWhitelist": "Weather biome whitelist",
   "localizedrain.configuration.weatherBiomeBlacklist": "Weather biome blacklist",
   "localizedrain.configuration.weatherBiomeOverrides": "Forced weather biomes",
+  "localizedrain.configuration.maxParentEntries": "Hard cap on stored biome-segment parent entries per dimension",
   "localizedrain.configuration.maxColumnScansPerTick": "Maximum biome column scans per tick",
   "localizedrain.configuration.debugLogging": "Verbose weather debug logging",
   "localizedrain.configuration.weatherBiomeCandidates": "Biome weather candidates",

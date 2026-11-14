@@ -52,6 +52,16 @@ public final class Config {
                             "When exceeded, least recently advanced states are removed first.")
                     .defineInRange("maxStoredStates", 4096, 256, 65536);
 
+    /**
+     * 段并查集父表的硬上限（每个维度）。父表会随探索过的段增长，
+     * 超过上限时清理会收缩「无引用、无状态」的节点，并逐出对应列缓存。
+     */
+    public static final ModConfigSpec.IntValue MAX_PARENT_ENTRIES =
+            BUILDER.comment("Hard cap on stored biome-segment parent entries per dimension.",
+                            "The parent map is pruned down to this size when it grows beyond it;",
+                            "evicting a column makes it re-register on the next scan.")
+                    .defineInRange("maxParentEntries", 32768, 4096, 1000000);
+
     /** 每 tick 最多扫描多少个新的 16×16 列（3D 片探测）。 */
     public static final ModConfigSpec.IntValue MAX_COLUMN_SCANS_PER_TICK =
             BUILDER.comment("How many new 16x16 columns may be scanned per tick for 3D biome patches.",

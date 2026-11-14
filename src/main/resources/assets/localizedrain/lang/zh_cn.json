@@ -13,6 +13,7 @@
   "localizedrain.configuration.weatherBiomeWhitelist": "天气生物群系白名单",
   "localizedrain.configuration.weatherBiomeBlacklist": "天气生物群系黑名单",
   "localizedrain.configuration.weatherBiomeOverrides": "强制天气生物群系",
+  "localizedrain.configuration.maxParentEntries": "每个维度群系段父表的硬上限",
   "localizedrain.configuration.maxColumnScansPerTick": "每 tick 最多扫描的群系列数",
   "localizedrain.configuration.debugLogging": "输出详细的天气调试日志",
   "localizedrain.configuration.weatherBiomeCandidates": "群系候选天气",

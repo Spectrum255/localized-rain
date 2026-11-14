@@ -111,8 +111,9 @@ public final class WeatherManager {
         int pruneAge = PRUNE_COUNTERS.getOrDefault(level, 0) + 1;
         if (pruneAge >= PRUNE_INTERVAL_TICKS) {
             pruneAge = 0;
-            data.prune(level.getGameTime(), maxStoredStates(), retentionTicks(),
-                    patch -> BiomePatches.isColumnCached(level, patch));
+            data.prune(level.getGameTime(), maxStoredStates(), retentionTicks(), maxParentEntries(),
+                    patch -> BiomePatches.isColumnCached(level, patch),
+                    patch -> BiomePatches.evictColumn(level, patch));
         }
         PRUNE_COUNTERS.put(level, pruneAge);
 
@@ -160,6 +161,15 @@ public final class WeatherManager {
         }
     }
 
+    /** 每个维度段父表的硬上限。 */
+    private static int maxParentEntries() {
+        try {
+            return Math.max(4096, Config.MAX_PARENT_ENTRIES.get());
+        } catch (IllegalStateException ignored) {
+            return 32768;
+        }
+    }
+
     /** 天气状态保留时长（tick）；0 = 不按时间清理。 */
     private static long retentionTicks() {
         try {
@@ -178,6 +188,8 @@ public final class WeatherManager {
      */
     private static void sweep(ServerLevel level, WeatherData data, boolean cycleWeather, int ticks,
                               Set<String> playerPatches) {
+        // 结算间隔是 ticks 个 tick：预算按间隔放大，冷启动补列不会被 4 列/tick 的默认值拖慢
+        BiomePatches.beginSweep(level, ticks);
         RandomSource random = level.getRandom();
         long gameTime = level.getGameTime();
         Set<String> cycling = SWEEP_CYCLING;
