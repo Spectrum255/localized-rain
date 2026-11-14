@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -17,20 +18,18 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.saveddata.SavedData;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 每个维度一份的天气存档。天气按「一片生物群系」保存（见 {@link BiomePatches}），
  * 同一个生物群系的不同区域各算各的天气。
  */
 public final class WeatherData extends SavedData {
+    private static final Logger LOGGER = LoggerFactory.getLogger(WeatherData.class);
     public static final String FILE_ID = "localizedrain_weather";
     private static final int DATA_VERSION = 10;
 
-    /**
-     * 父链解析的最大步数。合并时规范 key 取字典序最小者，向西/向北探索会不断把旧根挂到新根下，
-     * 合法链的深度可以达到「合并次数」量级；上限取得比父表容量（约 16k）更大，避免把合法深链当损坏。
-     */
-    private static final int MAX_PARENT_CHAIN = 32_768;
     /** 当前存档 key 的格式前缀（3D 段 key；子状态 key 也以它开头）。 */
     private static final String PATCH_KEY_PREFIX = "p3:";
 
@@ -53,6 +52,11 @@ public final class WeatherData extends SavedData {
 
     public static WeatherData load(CompoundTag tag, HolderLookup.Provider registries) {
         WeatherData data = new WeatherData();
+        int version = tag.contains("version", Tag.TAG_INT) ? tag.getInt("version") : 0;
+        if (version > DATA_VERSION) {
+            LOGGER.warn("Weather save was written by a newer data version ({} > {}); unknown fields will be ignored",
+                    version, DATA_VERSION);
+        }
         // 只保留当前格式（p3: 段 key）的条目。旧版本的 p:/g:/层化 key 已经没有任何分量能解析，
         // 读进来只会变成永远不被推进的孤儿（连保留天数清理都删不到），因此直接丢弃。
         ListTag entries = tag.getList("patches", Tag.TAG_COMPOUND);
@@ -160,7 +164,7 @@ public final class WeatherData extends SavedData {
         }
         long root = bucket;
         int guard = 0;
-        while (guard++ < MAX_PARENT_CHAIN) {
+        while (guard++ < BiomePatches.MAX_PARENT_CHAIN) {
             Long next = this.fallbackParents.get(root);
             if (next == null || next == root) {
                 break;
@@ -186,7 +190,7 @@ public final class WeatherData extends SavedData {
         int guard = 0;
         String next = this.segmentParents.get(root);
         while (next != null && !next.equals(root)) {
-            if (guard++ >= MAX_PARENT_CHAIN) {
+            if (guard++ >= BiomePatches.MAX_PARENT_CHAIN) {
                 // 父指针损坏（环或超长链）：按原 key 处理，避免把查询归到错误的分量
                 return null;
             }
@@ -310,30 +314,46 @@ public final class WeatherData extends SavedData {
      * 只在父表明显大于状态表时才扫描，避免每次清理都做全量遍历。
      */
     private boolean pruneParents(int maxEntries, java.util.function.Predicate<String> columnStillCached) {
-        boolean changed = false;
         int limit = Math.max(1024, maxEntries * 4);
-        if (this.segmentParents.size() > limit) {
-            // 第一遍：只删「根没有状态、且该列已不在扫描缓存里」的非根条目。
-            // 列还在缓存时不能删：columnFor 命中缓存不会重新注册/合并，删掉链接会把同一段群系切成多个片。
-            changed |= this.segmentParents.entrySet().removeIf(entry -> {
-                if (entry.getKey().equals(entry.getValue()) || columnStillCached.test(entry.getKey())) {
-                    return false;
-                }
-                String root = this.resolveSegmentRoot(entry.getKey());
-                return root == null || !this.weatherByPatch.containsKey(root);
-            });
-            // 第二遍：删除没有状态、没有子条目指向、且列已被淘汰的根，避免先删根造成悬空。
-            java.util.Set<String> referenced = new java.util.HashSet<>();
-            for (java.util.Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
-                if (!entry.getKey().equals(entry.getValue())) {
-                    referenced.add(entry.getValue());
-                }
+        if (this.segmentParents.size() <= limit) {
+            return false;
+        }
+        // 先建立「被引用」集合：被别的条目当作父节点的节点一律保留。
+        // 否则仍缓存、不会重新注册的列会指向悬空父项，canonical 在中间节点停住，天气被读成晴天。
+        Set<String> referenced = new HashSet<>(this.segmentParents.size() * 2);
+        for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
+            if (!entry.getKey().equals(entry.getValue())) {
+                referenced.add(entry.getValue());
             }
-            changed |= this.segmentParents.entrySet().removeIf(entry ->
-                    entry.getKey().equals(entry.getValue())
-                            && !this.weatherByPatch.containsKey(entry.getKey())
-                            && !referenced.contains(entry.getKey())
-                            && !columnStillCached.test(entry.getKey()));
+        }
+        // 根解析带记忆化 + 路径压缩：每条目最多沿链走一次，整体 O(n)，
+        // 避免合法深链让清理退化成 O(n × 链长)。
+        Map<String, String> roots = new HashMap<>();
+        List<String> removable = new ArrayList<>();
+        for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
+            String node = entry.getKey();
+            if (referenced.contains(node)) {
+                continue;
+            }
+            if (node.equals(entry.getValue())) {
+                // 自映射根：没有状态、没有子条目指向、列已淘汰才删
+                if (!this.weatherByPatch.containsKey(node) && !columnStillCached.test(node)) {
+                    removable.add(node);
+                }
+                continue;
+            }
+            if (columnStillCached.test(node)) {
+                continue;
+            }
+            String root = this.resolveRootMemo(node, roots);
+            if (root == null || !this.weatherByPatch.containsKey(root)) {
+                removable.add(node);
+            }
+        }
+        boolean changed = false;
+        for (String node : removable) {
+            this.segmentParents.remove(node);
+            changed = true;
         }
         if (!this.fallbackParents.isEmpty()
                 && this.weatherByPatch.keySet().stream().noneMatch(key -> key.startsWith("g:"))) {
@@ -344,44 +364,62 @@ public final class WeatherData extends SavedData {
     }
 
     /**
-     * 沿段父表解析到根；父项缺失时返回当前节点（由调用方按“根是否有状态”决定去留），
-     * 环或超长链（≥{@link #MAX_PARENT_CHAIN} 步）返回 {@code null}。
+     * 沿父表解析到根，并在一次清理/读档范围内记忆化 + 路径压缩。
+     * 父项缺失时返回当前节点（悬空），由调用方结合「根是否有状态」决定去留。
      */
-    private String resolveSegmentRoot(String node) {
-        String root = node;
-        String next = this.segmentParents.get(root);
-        int guard = 0;
-        while (next != null && !next.equals(root)) {
-            if (guard++ >= MAX_PARENT_CHAIN) {
-                return null;
-            }
-            root = next;
-            next = this.segmentParents.get(root);
+    private String resolveRootMemo(String node, Map<String, String> memo) {
+        String known = memo.get(node);
+        if (known != null) {
+            return known;
         }
+        String current = node;
+        List<String> path = new ArrayList<>(8);
+        String root = null;
+        int guard = 0;
+        while (guard++ < BiomePatches.MAX_PARENT_CHAIN) {
+            String parent = this.segmentParents.get(current);
+            if (parent == null) {
+                root = current;
+                break;
+            }
+            if (parent.equals(current)) {
+                root = current;
+                break;
+            }
+            path.add(current);
+            current = parent;
+        }
+        if (root == null) {
+            root = path.isEmpty() ? current : path.get(path.size() - 1);
+        }
+        for (String visited : path) {
+            memo.put(visited, root);
+            this.segmentParents.put(visited, root);
+        }
+        memo.put(root, root);
         return root;
     }
 
-    /** 读档时校验段父表：丢弃会形成环或链过长的条目，避免后续解析得到错误的片。 */
+    /**
+     * 读档时校验段父表：丢弃成环、超长或悬空的条目。
+     * 读档时列缓存是空的，后续扫描会重新 register/merge 重建链接，丢弃是安全的。
+     */
     private void sanitizeParents() {
         if (this.segmentParents.isEmpty()) {
             return;
         }
-        this.segmentParents.entrySet().removeIf(entry -> !hasTerminatingRoot(entry.getKey()));
-    }
-
-    private boolean hasTerminatingRoot(String node) {
-        String root = node;
-        String next = this.segmentParents.get(root);
-        int guard = 0;
-        while (next != null && !next.equals(root)) {
-            if (guard++ >= MAX_PARENT_CHAIN) {
-                return false;
+        Map<String, String> roots = new HashMap<>();
+        List<String> broken = new ArrayList<>();
+        for (String node : new ArrayList<>(this.segmentParents.keySet())) {
+            String root = this.resolveRootMemo(node, roots);
+            String rootParent = root == null ? null : this.segmentParents.get(root);
+            if (rootParent == null || !rootParent.equals(root)) {
+                broken.add(node);
             }
-            root = next;
-            next = this.segmentParents.get(root);
         }
-        // 合法终点必须是自映射的根；next == null 说明父项缺失（悬空链），同样按损坏处理
-        return next != null && next.equals(root);
+        for (String node : broken) {
+            this.segmentParents.remove(node);
+        }
     }
 
     /** 跳过夜晚时清空本维度所有范围的降雨与雷暴。 */

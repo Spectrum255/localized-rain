@@ -45,7 +45,14 @@ public final class BiomePatches {
     private static final int MAX_COLUMN_CACHE = 200_000;
     private static final int MAX_PATCH_BIOMES = 200_000;
     /** 父链解析上限：合法链可能比 128 深得多（每次合并 +1），这里与父表容量同数量级。 */
-    private static final int MAX_PARENT_CHAIN = 32_768;
+    /**
+     * 父链解析上限。合并按字典序取最小根，合法链会随合并次数线性加深，所以不能设得太小；
+     * 这里与父表容量同数量级，正常合并不会触达，只有父表损坏（成环/超长）才会命中。
+     */
+    public static final int MAX_PARENT_CHAIN = 32_768;
+
+    /** 父链损坏警告只打一次，避免每 tick 刷屏。 */
+    private static boolean warnedChainGuard;
     private static final int DEFAULT_COLUMN_SCANS_PER_TICK = 4;
     private static final long COLUMN_BUDGET_NANOS = 2_000_000L;
     /** 兼容旧代码：子状态分隔符（3D 模型不再使用，仅用于解析旧 key）。 */
@@ -396,12 +403,22 @@ public final class BiomePatches {
             root = next;
             next = parents.get(root);
         }
+        if (next != null && !next.equals(root)) {
+            // 父表损坏（成环/超长）：退化为按原节点处理，并只警告一次，避免静默把中间节点当根
+            if (!warnedChainGuard) {
+                warnedChainGuard = true;
+                LOGGER.warn("Segment parent chain exceeded {} steps while resolving {}; "
+                        + "treating the node as its own root. The parent map may be corrupted", MAX_PARENT_CHAIN, node);
+            }
+            return node;
+        }
         if (root.equals(node)) {
             return node;
         }
         WeatherData data = WeatherManager.data(level);
         String cursor = node;
-        while (!cursor.equals(root)) {
+        int compressGuard = 0;
+        while (!cursor.equals(root) && compressGuard++ < MAX_PARENT_CHAIN) {
             String parent = parents.get(cursor);
             if (parent == null || parent.equals(cursor)) {
                 break;
@@ -511,7 +528,12 @@ public final class BiomePatches {
      */
     public static boolean isColumnCached(ServerLevel level, String patch) {
         int[] parsed = parse3(patch);
-        return parsed != null && cachedColumn(level, parsed[0], parsed[1]) != null;
+        if (parsed == null) {
+            return false;
+        }
+        // 用 containsKey 而不是 get：COLUMNS 是 accessOrder 的 LRU，清理时的大量检查不能刷新访问顺序
+        Map<Long, Column> cache = COLUMNS.get(level);
+        return cache != null && cache.containsKey(ChunkPos.asLong(parsed[0], parsed[1]));
     }
 
     private static int sampleBlockY(ServerLevel level) {
