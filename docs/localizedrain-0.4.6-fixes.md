@@ -43,6 +43,7 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 - 产物：`build/libs/localizedrain-0.4.6.jar`（101,176 字节，
   SHA256 `2394D9DB57D9822771A8FC5E117F45C686E5E1A83357A1AE16E7E260AE8BA3D8`）
 - `META-INF/neoforge.mods.toml`：`version="0.4.6"`、`license="MIT"`。
+- 提交：`60766be014eee51138873ee7dfdbb20a0960d7cb`（已推送 `origin/main`）。
 
 ## 未验证
 
