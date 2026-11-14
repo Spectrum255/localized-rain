@@ -404,7 +404,11 @@ public final class BiomePatches {
             next = parents.get(root);
         }
         if (next != null && !next.equals(root)) {
-            // 父表损坏（成环/超长）：退化为按原节点处理，并只警告一次，避免静默把中间节点当根
+            // 父表损坏（成环/超长）：退化为按原节点处理，并只警告一次，避免静默把中间节点当根。
+            // 把该节点写成自映射（隔离），否则每次查询都要重走一整条坏链。
+            WeatherData parentData = WeatherManager.data(level);
+            parentData.segmentParents().put(node, node);
+            parentData.setDirty();
             if (!warnedChainGuard) {
                 warnedChainGuard = true;
                 LOGGER.warn("Segment parent chain exceeded {} steps while resolving {}; "

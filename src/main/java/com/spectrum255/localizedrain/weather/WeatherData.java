@@ -46,6 +46,14 @@ public final class WeatherData extends SavedData {
      */
     private final Map<String, String> segmentParents = new HashMap<>();
 
+    // 清理父表时复用的临时集合：父表可能十几万条，每轮重新分配会制造数 MB 垃圾。
+    private final Set<String> referencedScratch = new HashSet<>();
+    private final Map<String, String> rootScratch = new HashMap<>();
+    private final List<String> removableScratch = new ArrayList<>();
+    private final Set<String> seenScratch = new HashSet<>();
+    /** 父链超过上限只警告一次，避免损坏存档每 tick 刷屏。 */
+    private boolean warnedChainGuard;
+
     public static SavedData.Factory<WeatherData> factory() {
         return new SavedData.Factory<>(WeatherData::new, WeatherData::load);
     }
@@ -81,6 +89,11 @@ public final class WeatherData extends SavedData {
             if (!node.isEmpty() && !parent.isEmpty()) {
                 data.segmentParents.put(node, parent);
             }
+        }
+        if (!data.fallbackParents.isEmpty()
+                && data.weatherByPatch.keySet().stream().noneMatch(key -> key.startsWith("g:"))) {
+            // 0.4.5 起已不再读取 g: key；小存档里旧的退化方格父表没有清理触发点，读档时直接丢弃。
+            data.fallbackParents.clear();
         }
         data.sanitizeParents();
         return data;
@@ -163,15 +176,23 @@ public final class WeatherData extends SavedData {
             return patch;
         }
         long root = bucket;
+        boolean terminated = false;
         int guard = 0;
         while (guard++ < BiomePatches.MAX_PARENT_CHAIN) {
             Long next = this.fallbackParents.get(root);
             if (next == null || next == root) {
+                terminated = true;
                 break;
             }
             root = next;
         }
-        if (root == bucket) {
+        if (!terminated || root == bucket) {
+            if (!terminated && !this.warnedChainGuard) {
+                this.warnedChainGuard = true;
+                LOGGER.warn("Degraded-grid parent chain exceeded {} steps while resolving {}; "
+                        + "treating the node as its own root. The parent map may be corrupted",
+                        BiomePatches.MAX_PARENT_CHAIN, patch);
+            }
             return patch;
         }
         return "g:" + net.minecraft.world.level.ChunkPos.getX(root) + "," + net.minecraft.world.level.ChunkPos.getZ(root);
@@ -191,8 +212,15 @@ public final class WeatherData extends SavedData {
         String next = this.segmentParents.get(root);
         while (next != null && !next.equals(root)) {
             if (guard++ >= BiomePatches.MAX_PARENT_CHAIN) {
-                // 父指针损坏（环或超长链）：按原 key 处理，避免把查询归到错误的分量
-                return null;
+                // 父指针损坏（环或超长链）：按原 key 处理（与 BiomePatches.canonical 的降级一致），
+                // 读到的是该 key 自己的状态；下次合并/清理会重建分量。
+                if (!this.warnedChainGuard) {
+                    this.warnedChainGuard = true;
+                    LOGGER.warn("Segment parent chain exceeded {} steps while resolving {}; "
+                            + "treating the node as its own root. The parent map may be corrupted",
+                            BiomePatches.MAX_PARENT_CHAIN, patch);
+                }
+                return patch;
             }
             root = next;
             next = this.segmentParents.get(root);
@@ -318,18 +346,34 @@ public final class WeatherData extends SavedData {
         if (this.segmentParents.size() <= limit) {
             return false;
         }
-        // 先建立「被引用」集合：被别的条目当作父节点的节点一律保留。
+        Map<String, String> roots = this.rootScratch;
+        List<String> removable = this.removableScratch;
+        roots.clear();
+        removable.clear();
+
+        // 第一遍：成环/超长链属于损坏结构，整链删除。损坏节点即使被别的条目引用也要删，
+        // 否则「被引用就保留」会让环永远清不掉。
+        for (String node : this.segmentParents.keySet()) {
+            if (this.resolveRootMemo(node, roots) == null) {
+                removable.add(node);
+            }
+        }
+        for (String node : removable) {
+            this.segmentParents.remove(node);
+        }
+        boolean changed = !removable.isEmpty();
+        removable.clear();
+
+        // 第二遍：重建「被引用」集合，被别的条目当作父节点的节点一律保留。
         // 否则仍缓存、不会重新注册的列会指向悬空父项，canonical 在中间节点停住，天气被读成晴天。
-        Set<String> referenced = new HashSet<>(this.segmentParents.size() * 2);
+        Set<String> referenced = this.referencedScratch;
+        referenced.clear();
         for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
             if (!entry.getKey().equals(entry.getValue())) {
                 referenced.add(entry.getValue());
             }
         }
-        // 根解析带记忆化 + 路径压缩：每条目最多沿链走一次，整体 O(n)，
-        // 避免合法深链让清理退化成 O(n × 链长)。
-        Map<String, String> roots = new HashMap<>();
-        List<String> removable = new ArrayList<>();
+        roots.clear();
         for (Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
             String node = entry.getKey();
             if (referenced.contains(node)) {
@@ -350,7 +394,6 @@ public final class WeatherData extends SavedData {
                 removable.add(node);
             }
         }
-        boolean changed = false;
         for (String node : removable) {
             this.segmentParents.remove(node);
             changed = true;
@@ -365,24 +408,27 @@ public final class WeatherData extends SavedData {
 
     /**
      * 沿父表解析到根，并在一次清理/读档范围内记忆化 + 路径压缩。
-     * 父项缺失时返回当前节点（悬空），由调用方结合「根是否有状态」决定去留。
+     * 父项缺失时返回当前节点（悬空），由调用方结合「根是否有状态」决定去留；
+     * 成环或超过 {@link BiomePatches#MAX_PARENT_CHAIN} 步时返回 {@code null}（损坏），
+     * 调用方据此整链丢弃，避免把中间节点误当成根、反而把环「修复」成合法结构。
      */
     private String resolveRootMemo(String node, Map<String, String> memo) {
         String known = memo.get(node);
         if (known != null) {
-            return known;
+            return known.isEmpty() ? null : known;
         }
+        Set<String> seen = this.seenScratch;
+        seen.clear();
         String current = node;
         List<String> path = new ArrayList<>(8);
         String root = null;
-        int guard = 0;
-        while (guard++ < BiomePatches.MAX_PARENT_CHAIN) {
-            String parent = this.segmentParents.get(current);
-            if (parent == null) {
-                root = current;
+        while (true) {
+            if (!seen.add(current) || path.size() >= BiomePatches.MAX_PARENT_CHAIN) {
                 break;
             }
-            if (parent.equals(current)) {
+            String parent = this.segmentParents.get(current);
+            if (parent == null || parent.equals(current)) {
+                // 父项缺失（悬空）时以当前节点为临时根；自映射是正常根。
                 root = current;
                 break;
             }
@@ -390,7 +436,11 @@ public final class WeatherData extends SavedData {
             current = parent;
         }
         if (root == null) {
-            root = path.isEmpty() ? current : path.get(path.size() - 1);
+            for (String visited : path) {
+                memo.put(visited, "");
+            }
+            memo.put(node, "");
+            return null;
         }
         for (String visited : path) {
             memo.put(visited, root);
