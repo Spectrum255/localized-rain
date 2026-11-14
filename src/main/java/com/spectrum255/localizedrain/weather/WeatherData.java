@@ -29,7 +29,7 @@ public final class WeatherData extends SavedData {
     private static final Logger LOGGER = LoggerFactory.getLogger(WeatherData.class);
     public static final String FILE_ID = "localizedrain_weather";
     /** 0.4.11 起不再保存退化方格（{@code g:}）父表；旧存档里的该字段会被忽略。 */
-    private static final int DATA_VERSION = 11;
+    private static final int DATA_VERSION = 12;
 
     /** 当前存档 key 的格式前缀（3D 段 key）。 */
     private static final String PATCH_KEY_PREFIX = "p3:";
@@ -191,9 +191,15 @@ public final class WeatherData extends SavedData {
         return this.weatherByPatch.keySet();
     }
 
+    /** 该片（规范 key）是否处于手动覆盖状态；直接按 key 查，不做父链解析。 */
+    public boolean isManual(String patch) {
+        WeatherState state = this.weatherByPatch.get(patch);
+        return state != null && state.isManual();
+    }
+
     /** 按注册表里的天气类型设置一批群系片；{@code typeId} 决定类型，标志位由类型派生。 */
     public void setWeather(Collection<String> patches, String typeId, boolean raining, boolean thundering,
-                           int requestedDuration, RandomSource random) {
+                           int requestedDuration, RandomSource random, boolean manual) {
         boolean varyDuration = patches.size() > 1 && requestedDuration > 1;
         for (String patch : patches) {
             int duration = requestedDuration;
@@ -201,7 +207,7 @@ public final class WeatherData extends SavedData {
                 int variance = Math.max(1, requestedDuration / 10);
                 duration = Math.max(1, requestedDuration + random.nextInt(variance * 2 + 1) - variance);
             }
-            this.getOrCreate(patch, random).apply(typeId, raining, thundering, duration, random);
+            this.getOrCreate(patch, random).apply(typeId, raining, thundering, duration, random, manual);
         }
         this.setDirty();
     }
@@ -259,6 +265,29 @@ public final class WeatherData extends SavedData {
             WeatherState state = this.getOrCreate(patch, random);
             state.lastTick = gameTime;
             changed |= state.tick(random, cycleWeather, candidates.get(patch), steps);
+        }
+        if (changed) {
+            this.setDirty();
+        }
+    }
+
+    /**
+     * 推进被指令/API 手动覆盖的片：只走独立的手动计时器与雨量/雷量渐变，不参与自然循环。
+     * 计时结束后回到晴天，之后由白/黑名单与候选规则决定是否重新参与自然循环。
+     */
+    public void tickManual(RandomSource random, Collection<String> patches, long gameTime, int steps,
+                           boolean cycleWeather) {
+        if (patches.isEmpty() || steps <= 0) {
+            return;
+        }
+        boolean changed = false;
+        for (String patch : patches) {
+            WeatherState state = this.get(patch);
+            if (state == null) {
+                continue;
+            }
+            state.lastTick = gameTime;
+            changed |= state.tickManual(random, steps, cycleWeather);
         }
         if (changed) {
             this.setDirty();
@@ -576,6 +605,10 @@ public final class WeatherData extends SavedData {
         private boolean precipitating;
         /** 当前类型是否允许雷暴；候选天气里非雷暴类型为 false。 */
         private boolean thunderAllowed;
+        /** 是否由指令/API 手动设置：白名单/黑名单只约束自然循环，不约束手动覆盖。 */
+        private boolean manual;
+        /** 手动覆盖剩余 tick；manual=false 时无意义。 */
+        private int manualTime;
 
         private WeatherState() {}
 
@@ -603,6 +636,8 @@ public final class WeatherData extends SavedData {
             state.forced = tag.getBoolean("forced");
             state.precipitating = tag.getBoolean("precipitating");
             state.thunderAllowed = tag.getBoolean("thunder_allowed");
+            state.manual = tag.getBoolean("manual");
+            state.manualTime = tag.getInt("manual_time");
             String rawType = tag.getString("weather_type");
             state.type = rawType.isEmpty() ? state.builtinType() : parseType(rawType);
             return state;
@@ -621,6 +656,8 @@ public final class WeatherData extends SavedData {
             tag.putBoolean("forced", this.forced);
             tag.putBoolean("precipitating", this.precipitating);
             tag.putBoolean("thunder_allowed", this.thunderAllowed);
+            tag.putBoolean("manual", this.manual);
+            tag.putInt("manual_time", this.manualTime);
             tag.putString("weather_type", this.type.toString());
             return tag;
         }
@@ -752,7 +789,8 @@ public final class WeatherData extends SavedData {
             return changed || cycleWeather;
         }
 
-        private void apply(String typeId, boolean raining, boolean thundering, int requestedDuration, RandomSource random) {
+        private void apply(String typeId, boolean raining, boolean thundering, int requestedDuration,
+                           RandomSource random, boolean manual) {
             this.type = parseType(typeId);
             // 手动/API 设置会接管计时器；解除此前的强制/排除冻结状态
             this.frozen = false;
@@ -772,6 +810,45 @@ public final class WeatherData extends SavedData {
                 this.rainTime = durationOrRandom(requestedDuration, random, Config.MIN_RAIN_TICKS.get(), Config.MAX_RAIN_TICKS.get());
                 this.thunderTime = range(random, Config.MIN_THUNDER_DELAY_TICKS.get(), Config.MAX_THUNDER_DELAY_TICKS.get());
             }
+            // 手动覆盖使用独立计时器，不走自然循环的 rainTime/thunderTime 翻转
+            this.manual = manual;
+            this.manualTime = manual ? this.rainTime : 0;
+        }
+
+        /**
+         * 推进手动覆盖：只递减手动计时器并让雨/雷量向目标渐变，不参与自然天气循环。
+         * 计时结束后回到晴天，之后由名单决定是否重新参与自然循环。
+         */
+        private boolean tickManual(RandomSource random, int steps, boolean cycleWeather) {
+            if (!this.manual) {
+                return false;
+            }
+            boolean changed = false;
+            if (this.manualTime <= 0) {
+                // 兼容异常/旧数据：没有剩余时间就直接结束手动覆盖
+                this.manual = false;
+                this.frozen = false;
+                this.clear(random);
+                changed = true;
+            } else if (cycleWeather) {
+                this.manualTime -= steps;
+                changed = true;
+                if (this.manualTime <= 0) {
+                    this.manualTime = 0;
+                    this.manual = false;
+                    this.frozen = false;
+                    this.clear(random);
+                    changed = true;
+                }
+            }
+            float oldRain = this.rainLevel;
+            float oldThunder = this.thunderLevel;
+            float delta = 0.01F * steps;
+            this.rainLevel = Mth.clamp(this.rainLevel
+                    + (this.raining && this.precipitating ? delta : -delta), 0.0F, 1.0F);
+            this.thunderLevel = Mth.clamp(this.thunderLevel
+                    + (this.thundering && this.raining && this.precipitating ? delta : -delta), 0.0F, 1.0F);
+            return changed || oldRain != this.rainLevel || oldThunder != this.thunderLevel;
         }
 
         /**
@@ -783,13 +860,16 @@ public final class WeatherData extends SavedData {
             boolean thundering = raining && type.allowsThunder();
             boolean first = !this.forced;
             boolean typeChanged = !this.type.equals(typeId);
-            boolean changed = first || typeChanged || this.raining != raining || this.thundering != thundering;
+            boolean changed = first || typeChanged || this.raining != raining || this.thundering != thundering
+                    || this.manual;
             this.type = typeId;
             this.raining = raining;
             this.thundering = thundering;
             this.precipitating = raining;
             this.thunderAllowed = thundering;
             this.forced = true;
+            this.manual = false;
+            this.manualTime = 0;
             if (!this.frozen) {
                 this.frozen = true;
                 this.refreshTimers(random);
@@ -806,8 +886,10 @@ public final class WeatherData extends SavedData {
         /** 强制放晴：只关目标布尔，让雨量/雷量自然淡出；计时器同样冻结并在解除时重新随机。 */
         boolean forceClear(RandomSource random) {
             boolean changed = this.forced || !this.frozen || this.raining || this.thundering
-                    || !WeatherTypes.CLEAR_ID.equals(this.type);
+                    || !WeatherTypes.CLEAR_ID.equals(this.type) || this.manual;
             this.forced = false;
+            this.manual = false;
+            this.manualTime = 0;
             this.raining = false;
             this.thundering = false;
             this.precipitating = false;
@@ -839,7 +921,9 @@ public final class WeatherData extends SavedData {
             if (this.forced) {
                 return false;
             }
-            boolean changed = this.raining || this.thundering;
+            boolean changed = this.raining || this.thundering || this.manual;
+            this.manual = false;
+            this.manualTime = 0;
             this.raining = false;
             this.thundering = false;
             this.precipitating = false;
@@ -853,6 +937,11 @@ public final class WeatherData extends SavedData {
         /** 当前天气类型（注册表 id）。 */
         public ResourceLocation typeId() {
             return this.type;
+        }
+
+        /** 是否处于指令/API 手动覆盖状态：名单只约束自然循环，不约束这些状态。 */
+        public boolean isManual() {
+            return this.manual;
         }
 
         /** 旧存档没有类型字段时，按布尔推导内置类型。 */

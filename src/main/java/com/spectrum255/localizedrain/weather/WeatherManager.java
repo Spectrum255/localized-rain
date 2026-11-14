@@ -67,6 +67,8 @@ public final class WeatherManager {
     private static final Set<String> SWEEP_PINNED_CLEAR = new HashSet<>();
     private static final Map<String, List<WeatherBiomeFilter.Candidate>> SWEEP_CANDIDATES = new HashMap<>();
     private static final Set<String> SWEEP_HELD = new HashSet<>();
+    /** 本 sweep 中被指令/API 手动覆盖的片：只走手动计时器，不参与自然分类。 */
+    private static final Set<String> SWEEP_MANUAL = new HashSet<>();
 
     private WeatherManager() {}
 
@@ -126,7 +128,8 @@ public final class WeatherManager {
                 continue;
             }
             WeatherData.WeatherState state = data.get(patch);
-            if (state == null || !WeatherBiomeFilter.allows(level, patch)) {
+            WeatherBiomeFilter.Decision decision = WeatherBiomeFilter.decision(level, patch);
+            if (state == null || (!decision.allowed() && (decision.locked() || !state.isManual()))) {
                 send(player, WeatherData.WeatherState.clearDefault());
             } else {
                 send(player, state);
@@ -196,10 +199,12 @@ public final class WeatherManager {
         Map<String, WeatherBiomeFilter.Forced> forcedByPatch = SWEEP_FORCED;
         Set<String> pinnedClear = SWEEP_PINNED_CLEAR;
         Map<String, List<WeatherBiomeFilter.Candidate>> candidateByPatch = SWEEP_CANDIDATES;
+        Set<String> manual = SWEEP_MANUAL;
         cycling.clear();
         forcedByPatch.clear();
         pinnedClear.clear();
         candidateByPatch.clear();
+        manual.clear();
 
         boolean scan3d = scan3dSubstates();
         for (long chunkPos : LoadedChunks.snapshot(level)) {
@@ -214,7 +219,7 @@ public final class WeatherManager {
                 // 不再按 section 逐点采样（那段逻辑与列段完全重复）
                 if (BiomePatches.ensureColumn(level, chunkX, chunkZ)) {
                     BiomePatches.forEachColumnPatch(level, chunkX, chunkZ, patch ->
-                            classify(level, data, patch, cycling, forcedByPatch, pinnedClear, candidateByPatch));
+                            classify(level, data, patch, cycling, forcedByPatch, pinnedClear, candidateByPatch, manual));
                 }
                 continue;
             }
@@ -234,11 +239,11 @@ public final class WeatherManager {
             if (cached == null || !cached.equals(patch)) {
                 continue;
             }
-            classify(level, data, patch, cycling, forcedByPatch, pinnedClear, candidateByPatch);
+            classify(level, data, patch, cycling, forcedByPatch, pinnedClear, candidateByPatch, manual);
         }
         // 玩家所在片即使对应区块还没被扫描到也要推进（例如刚传送进未加载区域）
         for (String patch : playerPatches) {
-            classify(level, data, patch, cycling, forcedByPatch, pinnedClear, candidateByPatch);
+            classify(level, data, patch, cycling, forcedByPatch, pinnedClear, candidateByPatch, manual);
         }
 
         // 强制天气先压旗标，再按 cycle=false 推进：计时器不被随机循环覆盖，雨量/雷量仍渐变
@@ -263,6 +268,10 @@ public final class WeatherManager {
         if (!held.isEmpty()) {
             data.tick(random, false, held, gameTime, Map.of(), ticks);
         }
+        if (!manual.isEmpty()) {
+            // 手动覆盖单独计时：不参与自然循环，到期后回到晴天再由名单重新接管
+            data.tickManual(random, manual, gameTime, ticks, cycleWeather);
+        }
 
         float maximumRain = 0.0F;
         float maximumThunder = 0.0F;
@@ -280,6 +289,13 @@ public final class WeatherManager {
                 maximumThunder = Math.max(maximumThunder, state.thunderLevel());
             }
         }
+        for (String patch : manual) {
+            WeatherData.WeatherState state = data.get(patch);
+            if (state != null) {
+                maximumRain = Math.max(maximumRain, state.rainLevel());
+                maximumThunder = Math.max(maximumThunder, state.thunderLevel());
+            }
+        }
         // 维度级雨/雷量仍取所有推进过的片的最大值，供原版刷怪/天空亮度等维度级判定使用
         level.setRainLevel(maximumRain);
         level.setThunderLevel(maximumThunder);
@@ -287,8 +303,9 @@ public final class WeatherManager {
 
     private static void classify(ServerLevel level, WeatherData data, String patch, Set<String> cycling,
                                  Map<String, WeatherBiomeFilter.Forced> forcedByPatch, Set<String> pinnedClear,
-                                 Map<String, List<WeatherBiomeFilter.Candidate>> candidateByPatch) {
-        if (patch == null || cycling.contains(patch)
+                                 Map<String, List<WeatherBiomeFilter.Candidate>> candidateByPatch,
+                                 Set<String> manual) {
+        if (patch == null || cycling.contains(patch) || manual.contains(patch)
                 || forcedByPatch.containsKey(patch) || pinnedClear.contains(patch)) {
             return;
         }
@@ -296,6 +313,16 @@ public final class WeatherManager {
         if (decision.forced() != null) {
             // 强制天气：类型可能出现在干燥群系（例如沙漠里的沙尘暴），不检查 hasPrecipitation
             forcedByPatch.put(patch, decision.forced());
+            return;
+        }
+        if (decision.locked()) {
+            // 强制晴天锁定优先于手动覆盖
+            pinnedClear.add(patch);
+            return;
+        }
+        if (data.isManual(patch)) {
+            // 指令/API 手动覆盖优先于白名单/黑名单：只走手动计时器，不参与自然循环
+            manual.add(patch);
             return;
         }
         if (!decision.candidates().isEmpty()) {
@@ -434,10 +461,21 @@ public final class WeatherManager {
             return null;
         }
         String patch = BiomePatches.patchAt(level, pos);
-        if (patch == null || !WeatherBiomeFilter.decision(level, patch).allowed()) {
+        if (patch == null) {
             return null;
         }
-        return data(level).get(patch);
+        WeatherData.WeatherState state = data(level).get(patch);
+        WeatherBiomeFilter.Decision decision = WeatherBiomeFilter.decision(level, patch);
+        if (!decision.allowed() && decision.locked()) {
+            return null;
+        }
+        if (state != null && state.isManual()) {
+            return state;
+        }
+        if (!decision.allowed()) {
+            return null;
+        }
+        return state;
     }
 
     /** 已经记录过的所有范围（探索过的），用于 global 与全局天气兼容层。 */
@@ -445,7 +483,12 @@ public final class WeatherManager {
         return Set.copyOf(data(level).patches());
     }
 
-    /** 把一批群系片设为注册表里的某个天气类型（附属模组/API 用）。 */
+    /**
+     * 把一批群系片手动设为注册表里的某个天气类型（指令/API 用）。
+     *
+     * <p>白名单/黑名单只约束自然循环，手动设置可以覆盖它们；被配置强制天气锁定的片仍会被跳过。
+     * 设置的状态会记录为手动覆盖，计时结束后回到晴天，之后由名单决定是否重新参与自然循环。</p>
+     */
     public static void setWeather(ServerLevel level, Collection<String> patches,
                                   ResourceLocation typeId, int duration) {
         if (typeId == null) {
@@ -454,14 +497,13 @@ public final class WeatherManager {
         WeatherType type = WeatherTypes.byId(level, typeId);
         Collection<String> allowed = patches.stream()
                 .filter(patch -> WeatherBiomeFilter.forcedWeather(level, patch) == null)
-                .filter(patch -> WeatherBiomeFilter.allows(level, patch))
                 .toList();
         if (allowed.isEmpty()) {
             return;
         }
         boolean raining = type.hasPrecipitation();
         boolean thundering = raining && type.allowsThunder();
-        data(level).setWeather(allowed, typeId.toString(), raining, thundering, duration, level.getRandom());
+        data(level).setWeather(allowed, typeId.toString(), raining, thundering, duration, level.getRandom(), true);
     }
 
     /** 兼容层：把全局的 setWeatherParameters 调用翻译成「已记录的所有范围一起变天」。 */
@@ -513,10 +555,11 @@ public final class WeatherManager {
                 continue;
             }
             WeatherData.WeatherState state = data.get(patch);
+            WeatherBiomeFilter.Decision decision = WeatherBiomeFilter.decision(level, patch);
             if (state != null
                     && state.isThundering()
                     && WeatherTypes.byId(level, state.typeId()).allowsThunder()
-                    && WeatherBiomeFilter.allows(level, patch)) {
+                    && (decision.allowed() || (!decision.locked() && state.isManual()))) {
                 anyStormyPatch = true;
                 break;
             }
@@ -606,13 +649,15 @@ public final class WeatherManager {
             cached = new LookupCell(patch, decision);
             lookup.cells.put(cell, cached);
         }
-        if (!cached.decision().allowed()) {
-            return null;
-        }
         if (lookup.data == null) {
             lookup.data = data(level);
         }
-        return lookup.data.get(cached.patch());
+        WeatherData.WeatherState state = lookup.data.get(cached.patch());
+        if (!cached.decision().allowed()
+                && (cached.decision().locked() || state == null || !state.isManual())) {
+            return null;
+        }
+        return state;
     }
 
     /** 只读查询：没有记录的位置按晴天处理，不会创建存档条目，也不会触发轮廓计算。 */

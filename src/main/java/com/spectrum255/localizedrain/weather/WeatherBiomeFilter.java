@@ -36,7 +36,8 @@ import org.slf4j.Logger;
  * </ul>
  *
  * <p>语义：强制规则优先于黑名单，黑名单优先于白名单；白名单非空时只有白名单里的群系会参与局地天气。
- * 被黑名单排除（或强制为晴天）的群系永远不会下雨/下雪/打雷；被强制为雨/雷的群系片每 tick 保持对应天气。
+ * 被黑名单排除（或强制为晴天）的群系在自然循环中永远为晴天；指令/API 的手动设置可以在计时内
+ * 临时覆盖名单（强制天气锁除外），计时结束后重新按名单判定。被强制为雨/雷的群系片每 tick 保持对应天气。
  * 名单全为空时不做任何过滤，行为与之前完全一致。</p>
  *
  * <p>按群系片缓存判定结果，热路径（isRainingAt 等）只做一次 map 查找。配置重载或服务器启动时
@@ -45,8 +46,8 @@ import org.slf4j.Logger;
 public final class WeatherBiomeFilter {
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    private static final Decision ALLOWED = new Decision(true, null, List.of());
-    private static final Decision EXCLUDED = new Decision(false, null, List.of());
+    private static final Decision ALLOWED = new Decision(true, null, List.of(), false);
+    private static final Decision EXCLUDED = new Decision(false, null, List.of(), false);
     /** 解析失败的强制类型只警告一次，避免热路径刷日志。 */
     private static final Set<ResourceLocation> WARNED_TYPES = new HashSet<>();
 
@@ -121,14 +122,14 @@ public final class WeatherBiomeFilter {
                 return current.allows(biome) ? ALLOWED : EXCLUDED;
             }
             if (type.isClear()) {
-                return EXCLUDED;
+                return new Decision(false, null, List.of(), true);
             }
-            return new Decision(true, new Forced(forcedId, type), List.of());
+            return new Decision(true, new Forced(forcedId, type), List.of(), true);
         }
         List<Candidate> candidates = current.candidates(biome);
         if (!candidates.isEmpty()) {
             // 候选天气本身就意味着“允许发生”，不受白名单/降水类型限制
-            return new Decision(true, null, candidates);
+            return new Decision(true, null, candidates, false);
         }
         return current.allows(biome) ? ALLOWED : EXCLUDED;
     }
@@ -238,7 +239,7 @@ public final class WeatherBiomeFilter {
         };
     }
 
-    record Decision(boolean allowed, Forced forced, List<Candidate> candidates) {}
+    record Decision(boolean allowed, Forced forced, List<Candidate> candidates, boolean locked) {}
 
     /** 解析后的强制类型：注册表 id + 已解析的定义（定义在注册表可用后才有）。 */
     public record Forced(ResourceLocation id, WeatherType type) {}

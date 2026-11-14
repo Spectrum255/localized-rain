@@ -162,10 +162,9 @@ public final class LocalizedWeatherCommand {
 
     private static int apply(CommandSourceStack source, ServerLevel level, Set<String> patches,
                              ResourceLocation typeId, int duration) {
-        // 名单排除或被强制天气的群系不接受手动变更；全部被跳过时明确报错，部分跳过时提示数量
+        // 白/黑名单只约束自然循环：指令可以手动覆盖名单，但仍跳过被配置强制天气锁定的范围
         List<String> allowed = patches.stream()
                 .filter(patch -> WeatherBiomeFilter.forcedWeather(level, patch) == null)
-                .filter(patch -> WeatherBiomeFilter.allows(level, patch))
                 .toList();
         int skipped = patches.size() - allowed.size();
         if (allowed.isEmpty()) {

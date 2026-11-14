@@ -17,7 +17,8 @@ import net.minecraft.server.level.ServerLevel;
  * 该解析不受每 tick 列扫描预算限制（避免预算耗尽时短暂读到晴天），所以只适合低频调用：
  * 不要每 tick 对成百上千个不同坐标调用 {@link #typeAt}，批量读取请先 {@link #patches} / {@link #patchAt} 复用结果。</p>
  *
- * <p>写操作同样按群系片生效，且会遵循配置里的黑白名单与强制天气规则。</p>
+ * <p>写操作同样按群系片生效：手动设置会覆盖白名单/黑名单（名单只约束自然循环），
+ * 但会跳过被配置强制天气锁定的片。</p>
  */
 public final class WeatherApi {
     private WeatherApi() {}
@@ -73,7 +74,9 @@ public final class WeatherApi {
 
     /**
      * 把一批群系片的天气设为指定类型；duration 为 tick 数，{@code < 0} 表示使用该类型的随机区间。
-     * 只对已存在/有玩家的群系片生效；被黑白名单或强制天气排除的片会被跳过。
+     * 只对已存在/有玩家的群系片生效。白名单/黑名单只约束自然循环，手动设置可以覆盖它们；
+     * 被强制天气锁定的片会被跳过。设置的状态记录为手动覆盖，计时结束后回到晴天，
+     * 再由名单决定是否重新参与自然循环。
      */
     public static void setWeather(ServerLevel level, Collection<String> patches, ResourceLocation typeId, int duration) {
         WeatherManager.setWeather(level, patches, typeId, duration);
