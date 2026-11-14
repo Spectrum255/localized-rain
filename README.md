@@ -1,5 +1,7 @@
 # Localized Rain（局部有雨）
 
+[English](README.en.md) | 简体中文
+
 把原版 Minecraft 的「整个维度一起变天」改成**按群系独立判定**的天气模组。
 
 天气单位是「3D 群系片」：每个 16×16 方块的水平列按 quart（4 方块）采样出一条竖直的群系段列表，
@@ -36,7 +38,7 @@
   状态推进支持一次前进 N tick（计时器不翻转时用闭式快进），扫描间隔不再带来额外 CPU 开销。
 - 天气类型是一个独立的 NeoForge 注册表（`localizedrain:weather_type`），附属模组可以注册自己的类型，
   并通过 `WeatherApi` 查询/设置；服务端判定（`isRainingAt`、`isPrecipitatingAt`、`isThunderingAt` 等）
-  全部按类型工作。详见 `docs/localizedrain-0.2.0-weather-registry.md`。
+  全部按类型工作。详见下方「天气类型（lib API）」。
 
 ## 配置
 
@@ -51,6 +53,7 @@ weatherSimulationIntervalTicks = 20
 scan3dSubstates = true
 stateRetentionDays = 7
 maxStoredStates = 4096
+maxParentEntries = 16384
 maxColumnScansPerTick = 4
 debugLogging = false
 ```
@@ -68,6 +71,9 @@ debugLogging = false
 `stateRetentionDays`（默认 7，0 = 不按时间清理）与 `maxStoredStates`（默认 4096，范围 256–65536）
 控制存档清理：每 1200 tick 检查一次，先删除超过保留天数没有被推进的片，再按最近推进时间淘汰到条数上限。
 被清理的片下次重新加载时会以新的晴天周期开始。
+
+`maxParentEntries`（默认 16384，范围 4096–1000000）是持久化并查集父表的硬上限：超过时会优先淘汰
+没有状态引用的孤立父节点，防止父表随探索无限增长。它大致按 `maxStoredStates` 的 4 倍设定。
 
 `maxColumnScansPerTick`（默认 4，范围 1–64）限制每 tick 最多扫描多少列；每 tick 另有 2ms 的时间预算。
 玩家所在列不受预算限制，因此进新区域时不会出现「暂时按晴天算」的空档。
@@ -171,26 +177,8 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 ## 文档
 
 - `docs/idea.md`：设计目标
-- `docs/localizedrain-1.0.1-changes.md`：按群系片天气、thunderLevelAt API、显式落雷
-- `docs/localizedrain-1.1.0-xaero-compat.md`：Xaero's Minimap 天气行兼容
-- `docs/localizedrain-1.2.0-biome-filter.md`：生物群系天气黑白名单与强制天气
-- `docs/localizedrain-1.3.0-3d-patches.md`：垂直分层的群系片（3D patch，已被取代）
-- `docs/localizedrain-1.4.0-3d-substates.md`：地表群列 + 3D 群系子状态（已被 3D 列段模型取代）
-- `docs/localizedrain-0.1.1-placed-biome.md`：子状态改用区块已放置群系（识别 Meteoros 平流层）
-- `docs/localizedrain-0.2.0-weather-registry.md`：天气类型注册表、`WeatherApi` 与 lib 型判定层
-- `docs/localizedrain-0.2.1-weather-audit.md`：覆盖配置支持任意类型 id、失效判定审计与重接
-- `docs/localizedrain-0.3.0-loaded-chunks.md`：已加载区块的所有群系片同时推进
-- `docs/localizedrain-0.3.1-scan-and-cleanup.md`：3D 子状态扫描与存档清理
-- `docs/localizedrain-0.4.0-3d-patches.md`：3D 列段并查集、候选天气（0.3.2–0.4.4 汇总）
-- `docs/localizedrain-0.4.5-optimizations.md`：正确性/性能优化
-- `docs/localizedrain-0.4.6-fixes.md`：并查集父表清理、快进落盘与坐标 API 改名
-- `docs/localizedrain-0.4.7-fixes.md`：父表清理保留缓存列、父链上限与群系缓存 LRU
-- `docs/localizedrain-0.4.8-fixes.md`：清理被引用保护、线性清理、LRU 顺序与版本门控
-- `docs/localizedrain-0.4.9-fixes.md`：父表环检测、清理降分配与降级行为统一
-- `docs/localizedrain-0.4.11-fixes.md`：父表硬上限、批量扫描预算、快照清理与死代码移除
-- `docs/localizedrain-0.4.12-fixes.md`：父表背压、逐出配额、扫描预算上限与兼容性说明
-- `docs/localizedrain-1.0.0-preview.md`：1.0.0-preview 发布说明（默认过滤器清空、手动天气覆盖名单）
-- `localizedrain-0.4.4-变更记录.md`：另一个 agent 的改动记录（工作区根）
+- `docs/release-1.0.0-preview.md`：1.0.0-preview 发布说明（默认过滤器清空、手动天气覆盖名单）
+- `README.en.md`：README 的英文版
 
 ## 许可
 
