@@ -44,6 +44,8 @@ public final class BiomePatches {
     private static final int SAMPLE_BLOCK_Y = 128;
     private static final int MAX_COLUMN_CACHE = 200_000;
     private static final int MAX_PATCH_BIOMES = 200_000;
+    /** 父链解析上限：合法链可能比 128 深得多（每次合并 +1），这里与父表容量同数量级。 */
+    private static final int MAX_PARENT_CHAIN = 32_768;
     private static final int DEFAULT_COLUMN_SCANS_PER_TICK = 4;
     private static final long COLUMN_BUDGET_NANOS = 2_000_000L;
     /** 兼容旧代码：子状态分隔符（3D 模型不再使用，仅用于解析旧 key）。 */
@@ -209,6 +211,16 @@ public final class BiomePatches {
         };
     }
 
+    /** 片 key -> 群系缓存：同样按访问顺序 LRU，避免清空后已淘汰 key 的群系只能靠采样猜。 */
+    private static Map<String, ResourceLocation> newBiomeCache() {
+        return new LinkedHashMap<>(256, 0.75F, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, ResourceLocation> eldest) {
+                return size() > MAX_PATCH_BIOMES;
+            }
+        };
+    }
+
     /** 去掉旧子状态后缀，得到基础片 key；3D key 原样返回。 */
     public static String basePatch(String patch) {
         if (patch == null) {
@@ -370,11 +382,7 @@ public final class BiomePatches {
             parents.put(node, node);
             data.setDirty();
         }
-        Map<String, ResourceLocation> known = PATCH_BIOMES.computeIfAbsent(level, ignored -> new HashMap<>());
-        if (known.size() >= MAX_PATCH_BIOMES) {
-            // 只做缓存用途，清空后按列段/采样重建，避免长期探索导致无界增长
-            known.clear();
-        }
+        Map<String, ResourceLocation> known = PATCH_BIOMES.computeIfAbsent(level, ignored -> newBiomeCache());
         known.put(node, biome);
     }
 
@@ -384,7 +392,7 @@ public final class BiomePatches {
         String root = node;
         int guard = 0;
         String next = parents.get(root);
-        while (next != null && !next.equals(root) && guard++ < 128) {
+        while (next != null && !next.equals(root) && guard++ < MAX_PARENT_CHAIN) {
             root = next;
             next = parents.get(root);
         }
@@ -418,7 +426,7 @@ public final class BiomePatches {
         String oldRoot = newRoot.equals(rootA) ? rootB : rootA;
         parents.put(oldRoot, newRoot);
         data.transferFallbackState(oldRoot, newRoot);
-        PATCH_BIOMES.computeIfAbsent(level, ignored -> new HashMap<>()).put(newRoot, biome);
+        PATCH_BIOMES.computeIfAbsent(level, ignored -> newBiomeCache()).put(newRoot, biome);
         data.setDirty();
         if (debugEnabled()) {
             LOGGER.info("[LRDBG] union {} + {} -> {} biome={}", rootA, rootB, newRoot, biome);
@@ -493,6 +501,17 @@ public final class BiomePatches {
     private static Column cachedColumn(ServerLevel level, int columnX, int columnZ) {
         Map<Long, Column> cache = COLUMNS.get(level);
         return cache == null ? null : cache.get(ChunkPos.asLong(columnX, columnZ));
+    }
+
+    /**
+     * 该片 key 对应的列是否仍在列缓存中。
+     *
+     * <p>清理父表时用它区分「列已淘汰、下次扫描会重新注册合并」与「列仍在缓存、但父链被删」：
+     * 后者不会自动重建，会把同一段群系切成多个片，必须跳过。</p>
+     */
+    public static boolean isColumnCached(ServerLevel level, String patch) {
+        int[] parsed = parse3(patch);
+        return parsed != null && cachedColumn(level, parsed[0], parsed[1]) != null;
     }
 
     private static int sampleBlockY(ServerLevel level) {

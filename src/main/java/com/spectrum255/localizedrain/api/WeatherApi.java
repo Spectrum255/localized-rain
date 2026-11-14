@@ -13,14 +13,20 @@ import net.minecraft.server.level.ServerLevel;
  *
  * <p>所有查询都是按“位置”解析的：同一个群系片内共享天气，群系片按 3D 群系段
  * 的连通分量划分（见 {@code BiomePatches}）。查询走缓存、不加载区块；
- * {@link #typeAt} 在缓存未命中时会按需解析一次该位置所在的列，解析不到的位置按晴天处理。</p>
+ * {@link #typeAt} 在缓存未命中时会按需解析一次该位置所在的列，解析不到的位置按晴天处理。
+ * 该解析不受每 tick 列扫描预算限制（避免预算耗尽时短暂读到晴天），所以只适合低频调用：
+ * 不要每 tick 对成百上千个不同坐标调用 {@link #typeAt}，批量读取请先 {@link #patches} / {@link #patchAt} 复用结果。</p>
  *
  * <p>写操作同样按群系片生效，且会遵循配置里的黑白名单与强制天气规则。</p>
  */
 public final class WeatherApi {
     private WeatherApi() {}
 
-    /** 该位置当前天气类型；缓存未命中时会现场解析一次（可能触发轮廓计算），无记录返回晴天。 */
+    /**
+     * 该位置当前天气类型；缓存未命中时会现场解析一次（可能触发一次列扫描），无记录返回晴天。
+     *
+     * <p>冷路径不受扫描预算限制，适合低频查询；不要对大量坐标高频调用。</p>
+     */
     public static WeatherType typeAt(ServerLevel level, BlockPos pos) {
         return WeatherManager.weatherTypeAt(level, pos);
     }

@@ -111,7 +111,8 @@ public final class WeatherManager {
         int pruneAge = PRUNE_COUNTERS.getOrDefault(level, 0) + 1;
         if (pruneAge >= PRUNE_INTERVAL_TICKS) {
             pruneAge = 0;
-            data.prune(level.getGameTime(), maxStoredStates(), retentionTicks());
+            data.prune(level.getGameTime(), maxStoredStates(), retentionTicks(),
+                    patch -> BiomePatches.isColumnCached(level, patch));
         }
         PRUNE_COUNTERS.put(level, pruneAge);
 

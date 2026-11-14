@@ -24,7 +24,13 @@ import net.minecraft.world.level.saveddata.SavedData;
  */
 public final class WeatherData extends SavedData {
     public static final String FILE_ID = "localizedrain_weather";
-    private static final int DATA_VERSION = 9;
+    private static final int DATA_VERSION = 10;
+
+    /**
+     * 父链解析的最大步数。合并时规范 key 取字典序最小者，向西/向北探索会不断把旧根挂到新根下，
+     * 合法链的深度可以达到「合并次数」量级；上限取得比父表容量（约 16k）更大，避免把合法深链当损坏。
+     */
+    private static final int MAX_PARENT_CHAIN = 32_768;
     /** 当前存档 key 的格式前缀（3D 段 key；子状态 key 也以它开头）。 */
     private static final String PATCH_KEY_PREFIX = "p3:";
 
@@ -154,7 +160,7 @@ public final class WeatherData extends SavedData {
         }
         long root = bucket;
         int guard = 0;
-        while (guard++ < 64) {
+        while (guard++ < MAX_PARENT_CHAIN) {
             Long next = this.fallbackParents.get(root);
             if (next == null || next == root) {
                 break;
@@ -180,7 +186,7 @@ public final class WeatherData extends SavedData {
         int guard = 0;
         String next = this.segmentParents.get(root);
         while (next != null && !next.equals(root)) {
-            if (guard++ >= 128) {
+            if (guard++ >= MAX_PARENT_CHAIN) {
                 // 父指针损坏（环或超长链）：按原 key 处理，避免把查询归到错误的分量
                 return null;
             }
@@ -276,7 +282,8 @@ public final class WeatherData extends SavedData {
      * </ul>
      * 从未被推进过（{@code lastTick == 0}）的旧存档条目只受条数上限约束，不会被时间清理误删。
      */
-    public void prune(long gameTime, int maxEntries, long retentionTicks) {
+    public void prune(long gameTime, int maxEntries, long retentionTicks,
+                      java.util.function.Predicate<String> columnStillCached) {
         int before = this.weatherByPatch.size();
         if (retentionTicks > 0L) {
             this.weatherByPatch.entrySet().removeIf(entry -> {
@@ -292,7 +299,7 @@ public final class WeatherData extends SavedData {
                 this.weatherByPatch.remove(keys.get(index));
             }
         }
-        boolean parentsChanged = this.pruneParents(maxEntries);
+        boolean parentsChanged = this.pruneParents(maxEntries, columnStillCached);
         if (this.weatherByPatch.size() != before || parentsChanged) {
             this.setDirty();
         }
@@ -302,22 +309,31 @@ public final class WeatherData extends SavedData {
      * 清理并查集父表里已经没有对应天气状态的分量，避免探索过的段无限累积。
      * 只在父表明显大于状态表时才扫描，避免每次清理都做全量遍历。
      */
-    private boolean pruneParents(int maxEntries) {
+    private boolean pruneParents(int maxEntries, java.util.function.Predicate<String> columnStillCached) {
         boolean changed = false;
         int limit = Math.max(1024, maxEntries * 4);
         if (this.segmentParents.size() > limit) {
-            // 先删“根没有状态”的非根条目，再删无状态的根条目。
-            // 顺序不能反：根条目被删后子条目会悬空，canonical 解析不到终点，天气被读成晴天。
+            // 第一遍：只删「根没有状态、且该列已不在扫描缓存里」的非根条目。
+            // 列还在缓存时不能删：columnFor 命中缓存不会重新注册/合并，删掉链接会把同一段群系切成多个片。
             changed |= this.segmentParents.entrySet().removeIf(entry -> {
-                if (entry.getKey().equals(entry.getValue())) {
+                if (entry.getKey().equals(entry.getValue()) || columnStillCached.test(entry.getKey())) {
                     return false;
                 }
                 String root = this.resolveSegmentRoot(entry.getKey());
                 return root == null || !this.weatherByPatch.containsKey(root);
             });
+            // 第二遍：删除没有状态、没有子条目指向、且列已被淘汰的根，避免先删根造成悬空。
+            java.util.Set<String> referenced = new java.util.HashSet<>();
+            for (java.util.Map.Entry<String, String> entry : this.segmentParents.entrySet()) {
+                if (!entry.getKey().equals(entry.getValue())) {
+                    referenced.add(entry.getValue());
+                }
+            }
             changed |= this.segmentParents.entrySet().removeIf(entry ->
                     entry.getKey().equals(entry.getValue())
-                            && !this.weatherByPatch.containsKey(entry.getKey()));
+                            && !this.weatherByPatch.containsKey(entry.getKey())
+                            && !referenced.contains(entry.getKey())
+                            && !columnStillCached.test(entry.getKey()));
         }
         if (!this.fallbackParents.isEmpty()
                 && this.weatherByPatch.keySet().stream().noneMatch(key -> key.startsWith("g:"))) {
@@ -329,14 +345,14 @@ public final class WeatherData extends SavedData {
 
     /**
      * 沿段父表解析到根；父项缺失时返回当前节点（由调用方按“根是否有状态”决定去留），
-     * 环或超长链（≥128 步）返回 {@code null}。
+     * 环或超长链（≥{@link #MAX_PARENT_CHAIN} 步）返回 {@code null}。
      */
     private String resolveSegmentRoot(String node) {
         String root = node;
         String next = this.segmentParents.get(root);
         int guard = 0;
         while (next != null && !next.equals(root)) {
-            if (guard++ >= 128) {
+            if (guard++ >= MAX_PARENT_CHAIN) {
                 return null;
             }
             root = next;
@@ -358,7 +374,7 @@ public final class WeatherData extends SavedData {
         String next = this.segmentParents.get(root);
         int guard = 0;
         while (next != null && !next.equals(root)) {
-            if (guard++ >= 128) {
+            if (guard++ >= MAX_PARENT_CHAIN) {
                 return false;
             }
             root = next;
