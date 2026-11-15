@@ -20,6 +20,8 @@ public final class ClientStormCache {
     public static final class Storm {
         private final UUID id;
         private final ResourceLocation typeId;
+        private final boolean hasPrecipitation;
+        private final boolean allowsThunder;
         private final double minY;
         private final double maxY;
         private final float rain;
@@ -36,6 +38,8 @@ public final class ClientStormCache {
         private Storm(StormSyncPayload.StormEntry entry) {
             this.id = entry.id();
             this.typeId = entry.typeId();
+            this.hasPrecipitation = entry.hasPrecipitation();
+            this.allowsThunder = entry.allowsThunder();
             this.minY = entry.minY();
             this.maxY = entry.maxY();
             this.rain = entry.rain();
@@ -60,6 +64,8 @@ public final class ClientStormCache {
         public boolean dying() { return this.dying; }
         public int dyingTicksLeft() { return this.dyingTicksLeft; }
         public ResourceLocation typeId() { return this.typeId; }
+        public boolean hasPrecipitation() { return this.hasPrecipitation; }
+        public boolean allowsThunder() { return this.allowsThunder; }
         public boolean manual() { return this.manual; }
     }
 

@@ -171,7 +171,7 @@ Requires permission level 2. `type` takes an id from the `localizedrain:weather_
 /weather storm global <profile> [radius] [duration]
 ```
 
-`profile` is an id from the `localizedrain:storm_profile` registry (tab-completed; built-ins are `drizzle` / `shower` / `squall` / `thunderstorm`), and `id` is the storm UUID printed by `list`.
+`profile` is an id from the `localizedrain:storm_profile` registry (tab-completed; built-ins are `drizzle` / `shower` / `squall` / `thunderstorm` / `cave_rain`; `cave_rain` is a `band` profile used by `/weather rain` in no-skylight or ceiling dimensions), and `id` is the storm UUID printed by `list`.
 
 - `spawn` creates a manual storm centered on the executing source; when `radius` is omitted the profile's `radius` range is used. `band <minY> <maxY>` gives the storm an explicit vertical range (caves / high altitude).
 - `at` / `area` / `global`: `area` centers on the midpoint of the two corners with radius equal to half the horizontal diagonal plus `manualStormRadius`; `global` spawns one storm per player (radius defaults to `vanillaCommandStormRadius`); when `duration` is omitted the profile's stages run their full course.
@@ -291,7 +291,10 @@ The artifact is `build/libs/localizedrain-<version>.jar`.
 - Old (`p:`, `g:`, and `|biome` substate) save keys are discarded on load; old weather states are not migrated.
 - Candidate/custom weather types only provide server-side weather semantics; particles, sounds, and fog must be rendered by the addon mod itself.
 - In `mobile` mode `WeatherApi.setWeather(level, patches, ...)` (the old per-patch-key entry point) has no effect and only logs a single warning; the positional `setWeatherAt` works normally (it spawns a single-stage manual storm). Use `spawnStorm` / `removeStorms` for bulk control.
-- Whether rain/snow particles of underground `BAND` storms are hidden by vanilla's `canSeeSky` has not been verified in game yet; if they are, a narrow client-side mixin will be added (already reserved by implementation plan 7.4).
+- The mod no longer writes back dimension-level `rainLevel/thunderLevel`: `Level#isRaining()` / `getRainLevel()` stay at vanilla clear values, so third-party logic (including addon mods) will not see local rain or snow. Use the positional queries in `WeatherApi` instead. Vanilla snow accumulation and cauldron filling are restored per area via a redirect inside `tickPrecipitation`.
+- The dimension guard: dimensions with skylight but being "open without skylight", or with a ceiling, do not spawn natural storms; `SURFACE` manual storms are rejected, but the built-in `cave_rain` (`BAND`) profile lets `/weather rain` spawn a local cave storm in such dimensions automatically, and the `band` subcommand can be used explicitly. A `BAND` profile without an explicit vertical band gets a default band centred on the spawn point with half-height 48. Cave thunderstorms are not supported (`/weather thunder` reports this): `BAND` lightning requires sky visibility, so a rain-only profile is the only meaningful cave option. Non-`SURFACE` thunder types are rejected outright in those dimensions (the command returns `thunder_unavailable`).
+- Underground `BAND`/`COLUMN` storms rain but never strike: lightning requires an opening directly above the strike point (`canSeeSky`). Both modes restore the vanilla skeleton-horse trap with the same difficulty chance (`visualOnly` bolt instead of damage).
+- If client and server versions differ, players now receive a protocol notice on login (previously the failure was silent); protocol version `"6"`.
 
 ## Docs
 

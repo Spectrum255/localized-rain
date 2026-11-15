@@ -13,8 +13,7 @@ import com.spectrum255.localizedrain.api.WindState;
 import com.spectrum255.localizedrain.api.event.StormRemoveEvent;
 import com.spectrum255.localizedrain.api.event.StormSpawnEvent;
 import com.spectrum255.localizedrain.api.event.StormStageChangeEvent;
-import com.spectrum255.localizedrain.network.StormSyncPayload;
-import com.spectrum255.localizedrain.network.WeatherStatePayload;
+import com.spectrum255.localizedrain.weather.WeatherLightning;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -25,13 +24,12 @@ import java.util.UUID;
 import java.util.WeakHashMap;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.LightningBolt;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
@@ -44,14 +42,32 @@ public final class StormManager {
     /** 每个维度上一次全量推送风暴快照的 gameTime。 */
     private static final Map<ServerLevel, Long> LAST_SYNC = new WeakHashMap<>();
     /** 每个玩家上一次收到的 HUD 目标状态；只在变化时发包。 */
-    private static final Map<UUID, WeatherStatePayload> LAST_HUD = new HashMap<>();
+    private static final Map<UUID, StormSyncData.Hud> LAST_HUD = new HashMap<>();
     /** 同一 tick 内按 4 格立方复用 dominantAt 结果；tick 开头清空。 */
     private static final Map<ServerLevel, Map<Long, StormObject>> DOMINANT_CACHE = new WeakHashMap<>();
     private static final int DOMINANT_CACHE_LIMIT = 65536;
+    /** 未显式给 band 的 BAND 档案默认带半高（以生成点为中心）。 */
+    private static final int BAND_HALF_HEIGHT = 48;
     /** 手动风暴达到配置上限后只警告一次。 */
     private static boolean warnedManualCap;
+    /** 网络层启动时安装的发包实现；领域层不直接构造网络包。 */
+    private static final StormSyncSink NOOP_SINK = new StormSyncSink() {
+        @Override
+        public void broadcast(ServerLevel level, StormSyncData data) {}
+
+        @Override
+        public void sendTo(ServerPlayer player, StormSyncData data) {}
+
+        @Override
+        public void sendHud(ServerPlayer player, StormSyncData.Hud hud) {}
+    };
+    private static volatile StormSyncSink syncSink = NOOP_SINK;
 
     private StormManager() {}
+
+    public static void setSyncSink(StormSyncSink sink) {
+        syncSink = sink == null ? NOOP_SINK : sink;
+    }
 
     /** 服务器停止或换存档时清空全部静态缓存，避免旧维度/旧存档的引用残留。 */
     public static void resetCaches() {
@@ -67,6 +83,15 @@ public final class StormManager {
         warnedManualCap = false;
     }
 
+    /** 数据包重载后清空每片风暴缓存的档案引用，避免继续使用旧注册表对象。 */
+    public static void invalidateProfiles() {
+        for (StormData data : CACHE.values()) {
+            for (StormObject storm : data.storms()) {
+                storm.clearProfileCache();
+            }
+        }
+    }
+
     public static StormData data(ServerLevel level) {
         StormData data = CACHE.get(level);
         if (data == null) {
@@ -78,16 +103,13 @@ public final class StormManager {
 
     /** 向维度内所有玩家推送一次全量风暴快照，并记录推送时间。 */
     public static void broadcast(ServerLevel level) {
-        StormSyncPayload payload = payload(level);
-        for (ServerPlayer player : level.players()) {
-            player.connection.send(payload);
-        }
+        syncSink.broadcast(level, syncData(level));
         LAST_SYNC.put(level, level.getGameTime());
     }
 
     /** 给单个玩家补发一次快照（登录 / 跨维度）。 */
     public static void sendTo(ServerPlayer player) {
-        player.connection.send(payload(player.serverLevel()));
+        syncSink.sendTo(player, syncData(player.serverLevel()));
     }
 
     /** 玩家退出时清掉 HUD 缓存，重连后能重新收到完整状态。 */
@@ -95,19 +117,22 @@ public final class StormManager {
         LAST_HUD.remove(playerId);
     }
 
-    private static StormSyncPayload payload(ServerLevel level) {
-        List<StormSyncPayload.StormEntry> entries = new ArrayList<>();
+    /** 领域对象的只读投影；由安装的 {@link StormSyncSink} 编码并发送。 */
+    private static StormSyncData syncData(ServerLevel level) {
+        List<StormSyncData.Entry> entries = new ArrayList<>();
         for (StormObject storm : data(level).storms()) {
-            StormProfile profile = profile(level, storm.profileId());
+            StormProfile profile = storm.resolveProfile(level);
             if (profile == null) {
                 continue;
             }
-            entries.add(new StormSyncPayload.StormEntry(storm.id(), storm.x(), storm.z(), storm.radiusAt(),
+            WeatherType type = WeatherTypes.byId(level, storm.weatherType(profile));
+            entries.add(new StormSyncData.Entry(storm.id(), storm.x(), storm.z(), storm.radiusAt(),
                     storm.velocityX, storm.velocityZ, storm.minY(), storm.maxY(),
-                    storm.weatherType(profile), storm.baseRain(), storm.baseThunder(),
+                    storm.weatherType(profile), type.hasPrecipitation(), type.allowsThunder(),
+                    storm.baseRain(), storm.baseThunder(),
                     storm.manual(), storm.dying(), storm.dyingTicksLeft));
         }
-        return new StormSyncPayload(entries,
+        return new StormSyncData(entries,
                 WindField.stringConfig(Config.ISOLATED_BIOME_WEATHER, "clear"),
                 WindField.doubleConfig(Config.STORM_FALLOFF_RATIO, 0.3D));
     }
@@ -146,7 +171,7 @@ public final class StormManager {
     }
 
     public static StormSnapshot snapshotOf(ServerLevel level, StormObject storm) {
-        StormProfile profile = profile(level, storm.profileId());
+        StormProfile profile = storm.resolveProfile(level);
         return profile == null ? null : storm.snapshot(profile);
     }
 
@@ -213,7 +238,7 @@ public final class StormManager {
         Iterator<StormObject> iterator = data.storms().iterator();
         while (iterator.hasNext()) {
             StormObject storm = iterator.next();
-            StormProfile profile = profile(level, storm.profileId());
+            StormProfile profile = storm.resolveProfile(level);
             if (profile == null) {
                 // 档案被数据包移除：丢弃该风暴并记一次日志（设计 §10）
                 Localizedrain.LOGGER.warn("[localizedrain] dropping storm {} with unknown profile {}",
@@ -270,15 +295,8 @@ public final class StormManager {
         if (dirtyForSync || removedAny || level.getGameTime() - lastSync >= interval) {
             broadcast(level);
         }
-        // 维度级雨/雷量取所有风暴的最大值，供原版刷怪/天空亮度等维度级判定使用
-        float maxRain = 0.0F;
-        float maxThunder = 0.0F;
-        for (StormObject storm : data.storms()) {
-            maxRain = Math.max(maxRain, storm.effectiveRain());
-            maxThunder = Math.max(maxThunder, storm.effectiveThunder());
-        }
-        level.setRainLevel(maxRain);
-        level.setThunderLevel(maxThunder);
+        // 不再把风暴最大值写回维度级 rainLevel/thunderLevel：避免 Level#isRaining() 带动第三方全维度逻辑。
+        // 客户端风暴渲染由 StormSyncPayload + ClientStormWeather 负责；第三方应改用 WeatherApi。
         spawnLightning(level);
         sendHud(level);
         StormSpawner.tick(level);
@@ -298,21 +316,21 @@ public final class StormManager {
     private static void sendHud(ServerLevel level) {
         for (ServerPlayer player : level.players()) {
             StormObject storm = dominantAt(level, player.blockPosition());
-            WeatherStatePayload payload;
+            StormSyncData.Hud hud;
             if (storm == null) {
-                payload = new WeatherStatePayload(false, false, WeatherTypes.CLEAR.get().displayKey());
+                hud = new StormSyncData.Hud(false, false, WeatherTypes.CLEAR.get().displayKey());
             } else {
-                StormProfile profile = profile(level, storm.profileId());
+                StormProfile profile = storm.resolveProfile(level);
                 WeatherType type = profile == null ? WeatherTypes.CLEAR.get()
                         : WeatherTypes.byId(level, storm.weatherType(profile));
-                payload = new WeatherStatePayload(
-                        storm.effectiveRain() > 0.05F,
-                        storm.effectiveThunder() > 0.05F,
+                hud = new StormSyncData.Hud(
+                        type.hasPrecipitation() && storm.effectiveRain() > 0.05F,
+                        type.allowsThunder() && storm.effectiveThunder() > 0.05F,
                         type.displayKey());
             }
-            if (!payload.equals(LAST_HUD.get(player.getUUID()))) {
-                LAST_HUD.put(player.getUUID(), payload);
-                player.connection.send(payload);
+            if (!hud.equals(LAST_HUD.get(player.getUUID()))) {
+                LAST_HUD.put(player.getUUID(), hud);
+                syncSink.sendHud(player, hud);
             }
         }
     }
@@ -321,6 +339,12 @@ public final class StormManager {
     public static StormSnapshot spawn(ServerLevel level, StormSpawnSpec spec) {
         StormProfile profile = profile(level, spec.profileId());
         if (profile == null) {
+            return null;
+        }
+        boolean surfaceOnly = spec.verticalBand().isEmpty()
+                && profile.vertical() == StormProfile.VerticalMode.SURFACE;
+        if (spec.manual() && surfaceOnly && !allowsManualStorms(level)) {
+            // 无天光 / 有天花板的维度渲染不出 SURFACE 雨雪；BAND/COLUMN 洞穴风暴仍然允许
             return null;
         }
         if (spec.manual()) {
@@ -347,12 +371,24 @@ public final class StormManager {
             BlockPos center = BlockPos.containing(spec.center());
             minY = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, center).getY() - 16.0D;
             maxY = level.getMaxBuildHeight();
+        } else if (vertical == StormProfile.VerticalMode.BAND) {
+            // BAND 档案未显式指定区间时，以生成点为中心给一个默认带，而不是退化成整列
+            int centerY = Mth.floor(spec.center().y);
+            minY = Math.max(level.getMinBuildHeight(), centerY - BAND_HALF_HEIGHT);
+            maxY = Math.min(level.getMaxBuildHeight(), centerY + BAND_HALF_HEIGHT);
         } else {
+            // COLUMN：整列（洞穴/柱状风暴）
             minY = level.getMinBuildHeight();
             maxY = level.getMaxBuildHeight();
         }
         int stageIndex = Math.min(spec.stage(), profile.stages().size() - 1);
         StormProfile.Stage stage = profile.stage(stageIndex);
+        ResourceLocation effectiveType = spec.typeOverride().orElse(stage.type());
+        if (!allowsManualStorms(level) && vertical != StormProfile.VerticalMode.SURFACE
+                && WeatherTypes.byId(level, effectiveType).allowsThunder()) {
+            // 无天光 / 有天花板的维度里洞穴风暴永不落雷：直接拒绝雷暴类型（命令与 API 一致）
+            return null;
+        }
         StormObject storm = StormObject.create(UUID.randomUUID(), spec.profileId(),
                 spec.center().x, spec.center().z, radius, minY, maxY, vertical,
                 spec.manual(), random.nextLong(), level.getGameTime());
@@ -407,7 +443,7 @@ public final class StormManager {
     /** 推进到下一阶段；已是最后阶段则进入淡出。 */
     public static boolean advanceStage(ServerLevel level, UUID id) {
         StormObject storm = find(level, id);
-        StormProfile profile = storm == null ? null : profile(level, storm.profileId());
+        StormProfile profile = storm == null ? null : storm.resolveProfile(level);
         if (storm == null || profile == null) {
             return false;
         }
@@ -423,7 +459,7 @@ public final class StormManager {
     /** 跳到指定阶段（自动夹到合法区间）。 */
     public static boolean setStage(ServerLevel level, UUID id, int index) {
         StormObject storm = find(level, id);
-        StormProfile profile = storm == null ? null : profile(level, storm.profileId());
+        StormProfile profile = storm == null ? null : storm.resolveProfile(level);
         if (storm == null || profile == null) {
             return false;
         }
@@ -541,7 +577,7 @@ public final class StormManager {
         if (storm == null) {
             return false;
         }
-        StormProfile profile = profile(level, storm.profileId());
+        StormProfile profile = storm.resolveProfile(level);
         if (profile == null || storm.effectiveRain() <= 0.05F) {
             return false;
         }
@@ -556,7 +592,7 @@ public final class StormManager {
         if (storm == null) {
             return false;
         }
-        StormProfile profile = profile(level, storm.profileId());
+        StormProfile profile = storm.resolveProfile(level);
         if (profile == null || storm.effectiveRain() <= 0.05F) {
             return false;
         }
@@ -590,16 +626,31 @@ public final class StormManager {
         if (storm == null) {
             return WeatherTypes.CLEAR.get();
         }
-        StormProfile profile = profile(level, storm.profileId());
+        StormProfile profile = storm.resolveProfile(level);
         return profile == null ? WeatherTypes.CLEAR.get()
                 : WeatherTypes.byId(level, storm.weatherType(profile));
     }
 
     private static boolean thundering(ServerLevel level, StormObject storm) {
-        StormProfile profile = profile(level, storm.profileId());
+        StormProfile profile = storm.resolveProfile(level);
         return profile != null
                 && storm.effectiveThunder() > 0.05F
                 && WeatherTypes.byId(level, storm.weatherType(profile)).allowsThunder();
+    }
+
+    /** 只约束 SURFACE 手动风暴：无天光/带天花板的维度不允许 SURFACE 雨雪，但 BAND/COLUMN 洞穴风暴仍可。 */
+    public static boolean allowsManualStorms(ServerLevel level) {
+        return level.dimensionType().hasSkyLight() && !level.dimensionType().hasCeiling();
+    }
+
+    /** 是否有风暴正在降水（供天气模式分派与睡觉清天气使用）。 */
+    public static boolean anyPrecipitation(ServerLevel level) {
+        for (StormObject storm : data(level).storms()) {
+            if (storm.effectiveRain() > 0.2F) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** SURFACE 要求见天；BAND / COLUMN 跳过见天判定（洞穴风暴的核心）。 */
@@ -619,17 +670,52 @@ public final class StormManager {
             removeWhere(level, snapshot -> true, StormRemoveEvent.Reason.CLEARED, true);
             return;
         }
-        int radius = WindField.intConfig(Config.VANILLA_COMMAND_STORM_RADIUS, 512);
         ResourceLocation typeId = thundering ? WeatherTypes.THUNDER_ID : WeatherTypes.RAIN_ID;
+        boolean surfaceVisible = allowsManualStorms(level);
+        // 无天光/有天花板维度优先用 BAND/COLUMN 档案；没有可用档案才提示并放弃
+        ResourceLocation profileId = findProfileId(level, typeId, !surfaceVisible);
+        if (profileId == null) {
+            if (!surfaceVisible) {
+                Component message = Component.translatable("commands.localizedrain.storm.no_skylight_blocked");
+                for (ServerPlayer player : level.players()) {
+                    player.sendSystemMessage(message);
+                }
+            }
+            return;
+        }
+        // 半径交给档案自己的区间（cave_rain 是 48–96）；0 表示「不覆盖」
+        int radius = 0;
+        int players = level.players().size();
+        int spawned = 0;
         for (ServerPlayer player : level.players()) {
-            spawnManual(level, player.blockPosition(), typeId, radius,
-                    duration <= 0 ? -1 : duration);
+            if (spawnManual(level, player.blockPosition(), typeId, profileId, radius,
+                    duration <= 0 ? -1 : duration) != null) {
+                spawned++;
+            }
+        }
+        if (spawned < players) {
+            // 手动上限截断：告诉玩家是「部分生效」，避免被当成命令失效
+            Component message = Component.translatable(
+                    "commands.localizedrain.storm.partial_spawned", spawned, players);
+            for (ServerPlayer player : level.players()) {
+                player.sendSystemMessage(message);
+            }
         }
     }
 
     /** 在指定位置生成单阶段手动风暴（setWeatherAt / 原版 /weather 共用）。 */
     public static StormSnapshot spawnManual(ServerLevel level, BlockPos pos, ResourceLocation typeId,
                                             int radius, int durationTicks) {
+        ResourceLocation profileId = findProfileId(level, typeId, false);
+        if (profileId == null) {
+            return null;
+        }
+        return spawnManual(level, pos, typeId, profileId, radius, durationTicks);
+    }
+
+    /** 与公开重载相同，但由调用方指定档案；无天光维度会传入 BAND/COLUMN 档案。 */
+    private static StormSnapshot spawnManual(ServerLevel level, BlockPos pos, ResourceLocation typeId,
+                                             ResourceLocation profileId, int radius, int durationTicks) {
         if (WeatherTypes.CLEAR_ID.equals(typeId)) {
             // clear 的语义是「把覆盖该位置的风暴清掉」，而不是生成一个晴天风暴
             removeWhere(level, snapshot -> snapshot.covers(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D));
@@ -640,13 +726,6 @@ public final class StormManager {
             warnManualCap(cap);
             return null;
         }
-        ResourceLocation profileId = StormProfiles.ids(level).stream()
-                .filter(id -> profileMatches(level, id, typeId))
-                .findFirst()
-                .orElse(null);
-        if (profileId == null) {
-            return null;
-        }
         // 同一位置同类型的手动风暴先替换掉，重复 /weather rain 不会越堆越多
         double px = pos.getX() + 0.5D;
         double py = pos.getY() + 0.5D;
@@ -655,10 +734,12 @@ public final class StormManager {
                 && snapshot.weatherType().equals(typeId)
                 && snapshot.covers(px, py, pz), StormRemoveEvent.Reason.MANUAL, false);
         StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, Vec3.atCenterOf(pos))
-                .radius(radius)
                 .typeOverride(typeId)
                 .velocity(0.0D, 0.0D)       // 指令/API 定位的风暴默认固定，不被风场吹走
                 .manual(true);
+        if (radius > 0) {
+            builder.radius(radius);         // 0 = 沿用档案的 radius 区间
+        }
         if (durationTicks > 0) {
             builder.lifetime(durationTicks);
         }
@@ -669,12 +750,24 @@ public final class StormManager {
         return snapshot;
     }
 
-    private static boolean profileMatches(ServerLevel level, ResourceLocation profileId, ResourceLocation typeId) {
-        StormProfile profile = profile(level, profileId);
-        return profile != null && profile.stage(0).type().equals(typeId);
+    /** 按天气类型找第一个匹配档案；{@code nonSurface} 用于无天光维度，只接受 BAND/COLUMN 档案。 */
+    private static ResourceLocation findProfileId(ServerLevel level, ResourceLocation typeId, boolean nonSurface) {
+        for (ResourceLocation id : StormProfiles.ids(level)) {
+            StormProfile profile = profile(level, id);
+            if (profile != null
+                    && profile.stage(0).type().equals(typeId)
+                    && (!nonSurface || profile.vertical() != StormProfile.VerticalMode.SURFACE)) {
+                return id;
+            }
+        }
+        return null;
     }
 
-    /** 按风暴雷强抽签落雷；每次闪电都落在覆盖玩家的风暴内部。 */
+    /**
+     * 按风暴雷强抽签落雷：先掷骰（便宜），命中后才搜索落点，闪电落在覆盖玩家的风暴内部。
+     * 命中后的搜索分两层：外层最多重掷 3 轮，每轮 {@link #findStrikePos} 内最多取点 4 次；
+     * 文档里的 {@code chance × (1 - (1 - p)^4)} 只描述内层，实际有效期望略高于它，但每片风暴每 tick 仍只生成 1 道闪电。
+     */
     private static void spawnLightning(ServerLevel level) {
         double multiplier = WindField.doubleConfig(Config.STORM_LIGHTNING_MULTIPLIER, 1.0D);
         if (multiplier <= 0.0D) {
@@ -688,59 +781,88 @@ public final class StormManager {
             if (storm.effectiveThunder() <= 0.05F) {
                 continue;
             }
-            List<ServerPlayer> covered = new ArrayList<>();
+            int coveredCount = 0;
             for (ServerPlayer player : level.players()) {
                 if (storm.covers(player.getX(), player.getY(), player.getZ())) {
-                    covered.add(player);
+                    coveredCount++;
                 }
             }
-            if (covered.isEmpty()) {
-                continue;                       // 每片风暴每 tick 只掷一次，闪电密度不随玩家数放大
+            if (coveredCount == 0) {
+                continue;                       // 每片风暴每 tick 只抽一次签，闪电密度不随玩家数放大
             }
-            if (random.nextDouble() >= Math.min(1.0D, baseChance * multiplier * storm.effectiveThunder())) {
+            double chance = Math.min(1.0D, baseChance * multiplier * storm.effectiveThunder());
+            // 先用一次便宜的掷骰筛掉约 99.6% 的 tick，命中后才做位置搜索；
+            // 搜索失败最多重试 3 轮，常态成本接近 0，期望落雷率也不会被无效落点吞掉太多。
+            BlockPos pos = null;
+            for (int attempt = 0; attempt < 3 && pos == null; attempt++) {
+                if (random.nextDouble() >= chance) {
+                    break;
+                }
+                // 两遍遍历取第 n 个被覆盖玩家，避免每 tick 为每片风暴分配列表。
+                ServerPlayer anchor = pickCoveredPlayer(level, storm, random.nextInt(coveredCount));
+                if (anchor == null) {
+                    break;
+                }
+                pos = findStrikePos(level, storm, anchor, random);
+            }
+            if (pos == null) {
                 continue;
             }
-            // 落点跟随一名被覆盖玩家：风暴盘可能远大于视距，均匀取点会让绝大多数闪电被 hasChunk 丢弃
-            ServerPlayer anchor = covered.get(random.nextInt(covered.size()));
-            double strikeRange = Math.min(storm.radiusAt(), 128.0D);
+            // 与原版 tickChunk 相同的陷阱概率；抽到骷髅马时闪电只做视觉效果
+            WeatherLightning.strike(level, pos, random);
+        }
+    }
+
+    /** 取第 index 个被风暴完整覆盖（含 Y 区间）的玩家；用计数而不是中间列表，避免每 tick 分配。 */
+    private static ServerPlayer pickCoveredPlayer(ServerLevel level, StormObject storm, int index) {
+        int remaining = index;
+        for (ServerPlayer player : level.players()) {
+            if (storm.covers(player.getX(), player.getY(), player.getZ()) && remaining-- == 0) {
+                return player;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 在锚点玩家附近找一个能落雷的位置：最多 4 次尝试，先做区块/高度/空气/雷暴校验，全部无效返回 null。
+     * 只在掷骰命中后才调用，锚点站在风暴边缘时失败由调用方有界重试。
+     */
+    private static BlockPos findStrikePos(ServerLevel level, StormObject storm, ServerPlayer anchor, RandomSource random) {
+        int minY = (int) Math.max(storm.minY(), level.getMinBuildHeight());
+        int maxY = (int) Math.min(storm.maxY(), level.getMaxBuildHeight() - 1);
+        if (maxY < minY) {
+            return null;
+        }
+        double strikeRange = Math.min(storm.radiusAt(), 128.0D);
+        for (int attempt = 0; attempt < 4; attempt++) {
             double angle = random.nextDouble() * Math.PI * 2.0;
             double distance = Math.sqrt(random.nextDouble()) * strikeRange;
-            double x = anchor.getX() + Math.cos(angle) * distance;
-            double z = anchor.getZ() + Math.sin(angle) * distance;
-            int minY = (int) Math.max(storm.minY(), level.getMinBuildHeight());
-            int maxY = (int) Math.min(storm.maxY(), level.getMaxBuildHeight() - 1);
-            if (maxY < minY) {
-                continue;
-            }
-            if (!level.getChunkSource().hasChunk((int) Math.floor(x) >> 4, (int) Math.floor(z) >> 4)) {
+            int blockX = (int) Math.floor(anchor.getX() + Math.cos(angle) * distance);
+            int blockZ = (int) Math.floor(anchor.getZ() + Math.sin(angle) * distance);
+            if (!level.getChunkSource().hasChunk(blockX >> 4, blockZ >> 4)) {
                 continue;                   // 不为了落雷强制加载区块
             }
-            BlockPos pos;
             if (storm.verticalMode() == StormProfile.VerticalMode.SURFACE) {
-                pos = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING,
-                        new BlockPos((int) Math.floor(x), minY, (int) Math.floor(z)));
-                if (pos.getY() > maxY || !isThunderingAt(level, pos)) {
-                    continue;
+                BlockPos pos = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, new BlockPos(blockX, minY, blockZ));
+                if (pos.getY() >= minY && pos.getY() <= maxY && isThunderingAt(level, pos)) {
+                    return pos;
                 }
             } else {
                 // 洞穴/柱状风暴：在风暴区间内直接取点，落点必须有空间（不再借高度图，否则必然被顶部挡掉）
                 int y = minY + random.nextInt(maxY - minY + 1);
-                BlockPos candidate = new BlockPos((int) Math.floor(x), y, (int) Math.floor(z));
+                BlockPos candidate = new BlockPos(blockX, y, blockZ);
                 if (!level.getBlockState(candidate).isAir()) {
                     candidate = candidate.above();
                 }
-                if (!level.getBlockState(candidate).isAir()
-                        || !storm.covers(candidate.getX() + 0.5D, candidate.getY() + 0.5D, candidate.getZ() + 0.5D)
-                        || !isThunderingAt(level, candidate)) {
-                    continue;
+                if (level.getBlockState(candidate).isAir()
+                        && level.canSeeSky(candidate)   // 只落在正上方有开口的点，封闭洞穴不落雷
+                        && storm.covers(candidate.getX() + 0.5D, candidate.getY() + 0.5D, candidate.getZ() + 0.5D)
+                        && isThunderingAt(level, candidate)) {
+                    return candidate;
                 }
-                pos = candidate;
-            }
-            LightningBolt bolt = EntityType.LIGHTNING_BOLT.create(level);
-            if (bolt != null) {
-                bolt.moveTo(Vec3.atBottomCenterOf(pos));
-                level.addFreshEntity(bolt);
             }
         }
+        return null;
     }
 }

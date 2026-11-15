@@ -2,6 +2,7 @@ package com.spectrum255.localizedrain.storm;
 
 import com.spectrum255.localizedrain.api.StormProfile;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BiomeTags;
 import net.minecraft.util.Mth;
@@ -10,19 +11,27 @@ import net.minecraft.world.level.levelgen.Heightmap;
 
 /** 环境层：温度趋近脚下群系、水分按群系类型增减，并把结果变成阶段速度系数与阈值。 */
 final class StormEvolution {
+    /** 温湿度是缓慢漂移量：每 4 tick 更新一次，增益/插值按 4 倍补偿，稳态开销降到约 1/4。 */
+    private static final int UPDATE_INTERVAL = 4;
+
     private StormEvolution() {}
 
     static void tick(ServerLevel level, StormObject storm, StormProfile profile) {
+        long offset = Math.floorMod(storm.id.hashCode(), (int) Integer.MAX_VALUE) % (long) UPDATE_INTERVAL;
+        if (Math.floorMod(level.getGameTime() + offset, UPDATE_INTERVAL) != 0) {
+            return;
+        }
         BlockPos pos = BlockPos.containing(storm.x(), sampleY(level, storm), storm.z());
-        Biome biome = level.getBiome(pos).value();
+        Holder<Biome> holder = level.getBiome(pos);
+        Biome biome = holder.value();
 
         float targetTemperature = Mth.clamp((biome.getBaseTemperature() - 0.5F) / 1.5F, 0.0F, 1.0F);
-        storm.temperature = Mth.lerp(0.01F, storm.temperature, targetTemperature);
+        storm.temperature = Mth.lerp(0.01F * UPDATE_INTERVAL, storm.temperature, targetTemperature);
 
-        double gain = profile.environment().moistureGain()
+        double gain = profile.environment().moistureGain() * UPDATE_INTERVAL
                 * (biome.getPrecipitationAt(pos) == Biome.Precipitation.RAIN ? 2.0D : 0.3D)
-                * (isWetBiome(level, pos) ? 1.5D : 1.0D);
-        double decay = profile.environment().moistureDecay()
+                * (isWetBiome(holder) ? 1.5D : 1.0D);
+        double decay = profile.environment().moistureDecay() * UPDATE_INTERVAL
                 * (biome.getBaseTemperature() > 1.0F ? 2.0D : 1.0D);
         storm.moisture = Mth.clamp((float) (storm.moisture + gain - decay), 0.0F, 1.0F);
     }
@@ -55,8 +64,7 @@ final class StormEvolution {
                 .orElse(false);
     }
 
-    private static boolean isWetBiome(ServerLevel level, BlockPos pos) {
-        var holder = level.getBiome(pos);
+    private static boolean isWetBiome(Holder<Biome> holder) {
         // 1.21.1 的 BiomeTags 没有 IS_SWAMP，用海洋/丛林近似「潮湿群系」
         return holder.is(BiomeTags.IS_OCEAN) || holder.is(BiomeTags.IS_JUNGLE);
     }

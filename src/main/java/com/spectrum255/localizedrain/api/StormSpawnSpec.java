@@ -113,6 +113,11 @@ public final class StormSpawnSpec {
             return this;
         }
 
+        /** 命令层用来判断「已显式给了 BAND，不必按 SURFACE 做维度守卫」。 */
+        public boolean hasVerticalBand() {
+            return this.verticalBand != null;
+        }
+
         public StormSpawnSpec build() {
             return new StormSpawnSpec(this);
         }

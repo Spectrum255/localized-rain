@@ -14,6 +14,7 @@ import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import com.spectrum255.localizedrain.Config;
+import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSnapshot;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
@@ -326,27 +327,33 @@ public final class LocalizedWeatherCommand {
     private static StormSnapshot spawnChecked(CommandContext<CommandSourceStack> context,
                                               ResourceLocation profileId, StormSpawnSpec.Builder builder) {
         ServerLevel level = context.getSource().getLevel();
-        if (StormManager.profile(level, profileId) == null) {
+        StormProfile profile = StormManager.profile(level, profileId);
+        if (profile == null) {
             context.getSource().sendFailure(Component.translatable(
                     "commands.localizedrain.storm.unknown_profile", profileId.toString()));
             return null;
         }
-        warnIfNoSkylight(context);
+        boolean surfaceOnly = !builder.hasVerticalBand()
+                && profile.vertical() == StormProfile.VerticalMode.SURFACE;
+        if (surfaceOnly && !StormManager.allowsManualStorms(level)) {
+            // BAND/COLUMN 洞穴风暴在无天光维度仍然允许，只有 SURFACE 雨雪不可见
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.no_skylight_blocked"));
+            return null;
+        }
+        if (!StormManager.allowsManualStorms(level)
+                && WeatherTypes.byId(level, profile.stage(0).type()).allowsThunder()) {
+            // 非 SURFACE 的雷暴在无天光/天花板维度永不落雷，直接拒绝
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.thunder_unavailable"));
+            return null;
+        }
         StormSnapshot snapshot = StormManager.spawn(level, builder.build());
         if (snapshot == null) {
             context.getSource().sendFailure(Component.translatable(
                     "commands.localizedrain.storm.spawn_failed", profileId.toString()));
         }
         return snapshot;
-    }
-
-    /** 无天光/有天花板维度里手动风暴没有雨雪可视效果，但会占名额并抬高维度雨量，提前说清楚。 */
-    private static void warnIfNoSkylight(CommandContext<CommandSourceStack> context) {
-        ServerLevel level = context.getSource().getLevel();
-        if (!level.dimensionType().hasSkyLight() || level.dimensionType().hasCeiling()) {
-            context.getSource().sendSuccess(() -> Component.translatable(
-                    "commands.localizedrain.storm.no_skylight"), false);
-        }
     }
 
     /** 生成成功后统一回复 id、档案与半径；失败返回 0。 */
@@ -420,15 +427,29 @@ public final class LocalizedWeatherCommand {
     private static int spawnStormGlobal(CommandContext<CommandSourceStack> context, double radius, int duration) {
         ServerLevel level = context.getSource().getLevel();
         ResourceLocation profileId = profileId(context);
-        if (StormManager.profile(level, profileId) == null) {
+        StormProfile profile = StormManager.profile(level, profileId);
+        if (profile == null) {
             context.getSource().sendFailure(Component.translatable(
                     "commands.localizedrain.storm.unknown_profile", profileId.toString()));
+            return 0;
+        }
+        if (profile.vertical() == StormProfile.VerticalMode.SURFACE
+                && !StormManager.allowsManualStorms(level)) {
+            // BAND/COLUMN 洞穴风暴在无天光维度仍然允许，只有 SURFACE 雨雪不可见
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.no_skylight_blocked"));
+            return 0;
+        }
+        if (!StormManager.allowsManualStorms(level)
+                && WeatherTypes.byId(level, profile.stage(0).type()).allowsThunder()) {
+            // 非 SURFACE 的雷暴在无天光/天花板维度永不落雷，直接拒绝
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.thunder_unavailable"));
             return 0;
         }
         double actualRadius = Double.isNaN(radius)
                 ? WindField.intConfig(Config.VANILLA_COMMAND_STORM_RADIUS, 512)
                 : radius;
-        warnIfNoSkylight(context);
         int cap = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);
         int existing = StormManager.manualStormCount(level);
         int players = level.players().size();

@@ -3,6 +3,7 @@ package com.spectrum255.localizedrain.mixin;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.levelgen.Heightmap;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -20,18 +21,34 @@ public abstract class ServerLevelWeatherMixin {
         callback.cancel();
     }
 
-    @Inject(method = "tickPrecipitation",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerLevel;isRaining()Z"),
-            cancellable = true)
-    private void localizedrain$filterPrecipitation(BlockPos pos, CallbackInfo callback) {
+    @Redirect(method = "tickPrecipitation",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerLevel;isRaining()Z"))
+    private boolean localizedrain$localizedRaining(ServerLevel level, BlockPos pos) {
         if (WeatherManager.vanillaMode()) {
-            return;                     // 放行原版降水
+            return level.isRaining();
         }
-        // 结冰判定发生在这个调用点之前，取消降水不会影响冰/雪层的冻结逻辑。
-        // 这里只看「该区域是否在下雨」，降水类型交给原版按群系判断。
-        if (!WeatherManager.isPrecipitatingAt((ServerLevel) (Object) this, pos)) {
-            callback.cancel();
+        // 只替换 tickPrecipitation 内的这一个调用点：积雪（shouldSnow）与炼药锅集水（handlePrecipitation）
+        // 按区域恢复；而 Level#isRaining() 对第三方仍然是晴天（不再写回维度级 rainLevel）。
+        // 原版入参是 tickChunk 的随机方块坐标（y 恒为 0–15），真正用于放置雪/炼药锅的是方法内部算出的
+        // 高度图顶端；这里先换算，再用原始坐标兜底 BAND 洞穴风暴。结冰判定发生在这个调用点之前，不受影响。
+        BlockPos top = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, pos);
+        if (WeatherManager.isPrecipitatingAt(level, top)) {
+            return true;
         }
+        // 原始坐标只对移动模式的 BAND/COLUMN 风暴有意义：片模式下它位于地表以下，
+        // 洞片段降水不应让地表积雪/炼药锅集水。
+        return WeatherManager.mobileMode() && WeatherManager.isPrecipitatingAt(level, pos);
+    }
+
+    @Redirect(method = "tick",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerLevel;isRaining()Z"))
+    private boolean localizedrain$localizedSleepGate(ServerLevel level) {
+        if (WeatherManager.vanillaMode()) {
+            return level.isRaining();
+        }
+        // 原版睡眠块用维度级 isRaining() 决定是否 resetWeatherCycle；本模组不再写回 rainLevel，
+        // 这里接上局部天气，睡觉才会清掉区域天气（resetWeatherCycle 的注入因此可达）。
+        return level.isRaining() || WeatherManager.hasLocalPrecipitation(level);
     }
 
     @Inject(method = "resetWeatherCycle", at = @At("HEAD"), cancellable = true)

@@ -204,7 +204,7 @@ lightningMultiplier = 1.0
 /weather storm global <profile> [radius] [duration]
 ```
 
-`profile` 是 `localizedrain:storm_profile` 注册表里的 id（有 Tab 补全；内置 `drizzle` / `shower` / `squall` / `thunderstorm`），
+`profile` 是 `localizedrain:storm_profile` 注册表里的 id（有 Tab 补全；内置 `drizzle` / `shower` / `squall` / `thunderstorm` / `cave_rain`，其中 `cave_rain` 是 `band` 档案，供无天光/带天花板维度的 `/weather rain` 使用），
 `id` 是 `list` 输出里的风暴 UUID。
 
 - `spawn` 以执行者为圆心生成手动风暴；省略 `radius` 时使用档案的 `radius` 区间。`band <minY> <maxY>` 生成带竖直区间的风暴（洞穴/高空）。
@@ -335,8 +335,17 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 - 自定义天气类型只有服务端的天气语义；粒子、音效、雾效需要附属模组自己渲染。
 - `mobile` 模式下 `WeatherApi.setWeather(level, patches, ...)`（按片 key 的旧入口）不生效，只会记录一次警告；
   带坐标的 `setWeatherAt` 正常工作（生成一个单阶段手动风暴）。批量控制请改用 `spawnStorm` / `removeStorms`。
-- 地下 `BAND` 风暴的雨雪粒子是否会被原版的 `canSeeSky` 挡住尚未在游戏内验证；
-  如果被挡住，会追加一个窄范围的客户端 Mixin（实现计划 7.4 已预留）。
+- 本模组不写回维度级 `rainLevel/thunderLevel`：`Level#isRaining()`/`getRainLevel()` 保持原版晴天，
+  依赖它们的第三方逻辑（包括附属模组）不会感知局地雨雪；请改用 `WeatherApi` 的按位置查询。
+  原版的积雪与炼药锅集水已通过 `tickPrecipitation` 内的重定向按区域恢复。
+- 维度守卫：露天但无天光、或带天花板的维度不自然生成风暴；`SURFACE` 手动风暴会被拒绝，
+  但内置 `cave_rain`（`BAND`）档案让 `/weather rain` 在该类维度自动生成本地洞穴风暴，
+  也可以显式使用 `band` 子命令；未显式给区间的 `BAND` 档案以生成点为中心取半高 48 的带。
+- 非 `SURFACE` 的雷暴类型在上述维度被直接拒绝（命令返回 `thunder_unavailable`）：洞穴风暴永远不会落雷。
+  洞穴不提供雷暴档案（`/weather thunder` 在该类维度直接提示）：`BAND` 落雷要求见天，下界恒不落雷。
+- 地下 `BAND`/`COLUMN` 风暴只下雨、不落雷：落雷要求落点正上方有开口（`canSeeSky`）；
+  片模式与移动模式都按原版难度概率补回了骷髅马陷阱（`visualOnly` 闪电代替伤害）。
+- 客户端与服务端版本不一致时，登录会收到网络协议提示（此前为静默失效）；协议版本 `"6"`。
 
 ## 文档
 

@@ -4,6 +4,7 @@ import com.spectrum255.localizedrain.Config;
 import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
+import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import java.util.List;
 import net.minecraft.core.BlockPos;
@@ -72,29 +73,33 @@ final class StormSpawner {
         if (StormManager.isIsolatedAt(level, probe)) {
             return;                                     // 隔离群系是绝对生成禁区
         }
-        Holder.Reference<StormProfile> holder = StormProfiles.randomNatural(level, random).orElse(null);
-        if (holder == null) {
-            return;
-        }
-        StormProfile profile = holder.value();
-        if (!filterAllows(level, probe, profile)) {
-            return;
-        }
         int surfaceY = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, probe).getY();
 
         boolean cave = WindField.boolConfig(Config.NATURAL_CAVE_STORMS, false) && random.nextFloat() < 0.4F;
-        if (cave) {
-            double[] band = findCaveBand(level, probe.getX(), probe.getZ(), surfaceY);
-            if (band != null) {
-                int radius = WindField.intConfig(Config.CAVE_STORM_RADIUS, 64);
-                StormManager.spawn(level, StormSpawnSpec
-                        .builder(holder.key().location(), new Vec3(x, surfaceY, z))
-                        .radius(radius)
-                        .verticalBand(band[0], band[1])
-                        .manual(false)
-                        .build());
+        double[] band = cave ? findCaveBand(level, probe.getX(), probe.getZ(), surfaceY) : null;
+        Holder.Reference<StormProfile> holder;
+        if (band != null) {
+            // 洞穴风暴只接受降雨档案：BAND 落雷要求落点见天，雷暴档案在洞里永远不落雷
+            holder = StormProfiles.randomNatural(level, random,
+                    profile -> WeatherTypes.RAIN_ID.equals(profile.stage(0).type())).orElse(null);
+            if (holder == null || !filterAllows(level, probe, holder.value())) {
                 return;
             }
+            int radius = WindField.intConfig(Config.CAVE_STORM_RADIUS, 64);
+            StormManager.spawn(level, StormSpawnSpec
+                    .builder(holder.key().location(), new Vec3(x, surfaceY, z))
+                    .radius(radius)
+                    .verticalBand(band[0], band[1])
+                    .manual(false)
+                    .build());
+            return;
+        }
+        holder = StormProfiles.randomNatural(level, random).orElse(null);
+        if (holder == null) {
+            return;
+        }
+        if (!filterAllows(level, probe, holder.value())) {
+            return;
         }
         StormManager.spawn(level, StormSpawnSpec
                 .builder(holder.key().location(), new Vec3(x, surfaceY, z))

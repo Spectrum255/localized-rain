@@ -36,7 +36,7 @@
   "localizedrain.configuration.despawnDistance": "自然风暴开始淡出的距离（方块）",
   "localizedrain.configuration.despawnGraceTicks": "远离玩家多久后淡出（tick）",
   "localizedrain.configuration.manualStormRadius": "单点手动风暴的默认半径（方块）",
-  "localizedrain.configuration.vanillaCommandStormRadius": "原版 /weather 生成风暴的半径（方块）",
+  "localizedrain.configuration.vanillaCommandStormRadius": "/weather storm global 未指定半径时的默认半径（方块）",
   "localizedrain.configuration.stormSyncIntervalTicks": "风暴全量同步间隔（tick）",
   "localizedrain.configuration.falloffRatio": "风暴强度衰减带宽度（相对半径）",
   "localizedrain.configuration.lightningMultiplier": "风暴落雷频率倍率",
@@ -75,5 +75,8 @@
   "commands.localizedrain.storm.wind_set": "已设置风场速度 x=%s z=%s",
   "commands.localizedrain.storm.wind_failed": "风速必须是有限的数值",
   "commands.localizedrain.storm.manual_limit": "手动风暴已达上限（当前 %s 个，上限 %s 个），无法再生成",
-  "commands.localizedrain.storm.no_skylight": "该维度没有天光或有天花板：风暴不会有雨雪可视效果，但仍会占用名额并抬高维度雨量"
+  "commands.localizedrain.storm.no_skylight_blocked": "该维度没有天光或有天花板：SURFACE 雨雪不可见，且本模组不提供洞穴雷暴；可用 band 子命令生成洞穴降雨",
+  "commands.localizedrain.storm.thunder_unavailable": "该维度没有天光或有天花板：洞穴风暴永远不会落雷，不能在这里生成雷暴类型",
+  "commands.localizedrain.storm.partial_spawned": "已生成 %s / %s 个手动风暴：达到手动风暴上限，部分玩家没有获得天气",
+  "message.localizedrain.protocol_mismatch": "你的客户端未安装同版本的 Localized Rain（或网络协议不匹配），天气与风暴同步将不可用"
 }

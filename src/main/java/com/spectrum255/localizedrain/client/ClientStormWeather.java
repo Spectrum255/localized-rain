@@ -67,8 +67,11 @@ public final class ClientStormWeather {
                         ? Math.max(0.0F, Math.min(1.0F,
                                 storm.dyingTicksLeft() / (float) StormSyncPayload.FADE_TICKS))
                         : 1.0F;
-                targetRain = Math.max(targetRain, (float) (storm.rain() * horizontal * vertical * fade));
-                targetThunder = Math.max(targetThunder, (float) (storm.thunder() * horizontal * vertical * fade));
+                // 类型能力位随快照下发：非降水类型不渲染雨，禁止雷暴的类型不渲染雷
+                float typeRain = storm.hasPrecipitation() ? storm.rain() : 0.0F;
+                float typeThunder = storm.allowsThunder() ? storm.thunder() : 0.0F;
+                targetRain = Math.max(targetRain, (float) (typeRain * horizontal * vertical * fade));
+                targetThunder = Math.max(targetThunder, (float) (typeThunder * horizontal * vertical * fade));
             }
         }
         currentRain = approach(currentRain, targetRain);

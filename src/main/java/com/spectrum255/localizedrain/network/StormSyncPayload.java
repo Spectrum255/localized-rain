@@ -25,6 +25,7 @@ public record StormSyncPayload(List<StormEntry> storms, String isolatedMode, dou
                              double velocityX, double velocityZ,
                              double minY, double maxY,
                              ResourceLocation typeId,
+                             boolean hasPrecipitation, boolean allowsThunder,
                              float rain, float thunder,
                              boolean manual, boolean dying, int dyingTicksLeft) {}
 
@@ -39,6 +40,8 @@ public record StormSyncPayload(List<StormEntry> storms, String isolatedMode, dou
                 buf.writeDouble(entry.minY());
                 buf.writeDouble(entry.maxY());
                 buf.writeResourceLocation(entry.typeId());
+                buf.writeBoolean(entry.hasPrecipitation());
+                buf.writeBoolean(entry.allowsThunder());
                 buf.writeFloat(entry.rain());
                 buf.writeFloat(entry.thunder());
                 buf.writeBoolean(entry.manual());
@@ -47,7 +50,8 @@ public record StormSyncPayload(List<StormEntry> storms, String isolatedMode, dou
             },
             buf -> new StormEntry(buf.readUUID(), buf.readDouble(), buf.readDouble(), buf.readDouble(),
                     buf.readDouble(), buf.readDouble(), buf.readDouble(), buf.readDouble(),
-                    buf.readResourceLocation(), buf.readFloat(), buf.readFloat(),
+                    buf.readResourceLocation(), buf.readBoolean(), buf.readBoolean(),
+                    buf.readFloat(), buf.readFloat(),
                     buf.readBoolean(), buf.readBoolean(), buf.readVarInt()));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, StormSyncPayload> STREAM_CODEC = StreamCodec.of(

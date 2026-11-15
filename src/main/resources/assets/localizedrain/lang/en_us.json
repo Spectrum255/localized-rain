@@ -36,7 +36,7 @@
   "localizedrain.configuration.despawnDistance": "Distance at which a natural storm starts to fade (blocks)",
   "localizedrain.configuration.despawnGraceTicks": "How long a natural storm must stay far away before fading (ticks)",
   "localizedrain.configuration.manualStormRadius": "Default radius for single-position manual storms (blocks)",
-  "localizedrain.configuration.vanillaCommandStormRadius": "Radius of storms created by vanilla /weather (blocks)",
+  "localizedrain.configuration.vanillaCommandStormRadius": "Default radius for /weather storm global when omitted (blocks)",
   "localizedrain.configuration.stormSyncIntervalTicks": "Full storm sync interval (ticks)",
   "localizedrain.configuration.falloffRatio": "Storm intensity falloff band width (fraction of radius)",
   "localizedrain.configuration.lightningMultiplier": "Storm lightning frequency multiplier",
@@ -75,5 +75,8 @@
   "commands.localizedrain.storm.wind_set": "Set wind velocity to x=%s z=%s",
   "commands.localizedrain.storm.wind_failed": "Wind velocity must be a finite number",
   "commands.localizedrain.storm.manual_limit": "Manual storm limit reached (current %s, limit %s); nothing was spawned",
-  "commands.localizedrain.storm.no_skylight": "This dimension has no skylight or a ceiling: the storm has no visible rain or snow, but still uses a storm slot and raises the dimension rain level"
+  "commands.localizedrain.storm.no_skylight_blocked": "This dimension has no skylight or has a ceiling: SURFACE rain/snow is invisible, and cave thunderstorms are not supported. Use the band subcommand for cave rain",
+  "commands.localizedrain.storm.thunder_unavailable": "This dimension has no skylight or has a ceiling: cave storms never strike, so thunder weather cannot be spawned here",
+  "commands.localizedrain.storm.partial_spawned": "Spawned %s of %s manual storms: the manual storm limit was reached, so some players did not receive weather",
+  "message.localizedrain.protocol_mismatch": "Your client is missing a matching Localized Rain version (or uses an incompatible protocol); weather and storm sync are unavailable"
 }

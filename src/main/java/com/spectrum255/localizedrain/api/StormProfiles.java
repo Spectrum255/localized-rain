@@ -4,6 +4,7 @@ import com.spectrum255.localizedrain.Localizedrain;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
@@ -46,22 +47,33 @@ public final class StormProfiles {
 
     /** 按 weight 加权抽一个自然档案；池为空返回 empty。 */
     public static Optional<Holder.Reference<StormProfile>> randomNatural(Level level, RandomSource random) {
+        return randomNatural(level, random, profile -> true);
+    }
+
+    /** 按 weight 加权抽一个自然档案，只考虑 {@code filter} 通过的档案（洞穴风暴只接受降雨档案）。 */
+    public static Optional<Holder.Reference<StormProfile>> randomNatural(Level level, RandomSource random,
+                                                                        Predicate<StormProfile> filter) {
         List<Holder.Reference<StormProfile>> pool = naturalPool(level);
         int total = 0;
         for (Holder.Reference<StormProfile> holder : pool) {
-            total += holder.value().weight();
+            if (filter.test(holder.value())) {
+                total += holder.value().weight();
+            }
         }
         if (total <= 0) {
             return Optional.empty();
         }
         int roll = random.nextInt(total);
         for (Holder.Reference<StormProfile> holder : pool) {
+            if (!filter.test(holder.value())) {
+                continue;
+            }
             roll -= holder.value().weight();
             if (roll < 0) {
                 return Optional.of(holder);
             }
         }
-        return Optional.of(pool.get(pool.size() - 1));
+        return Optional.empty();
     }
 
     /** 服务器启动时打一行日志，便于确认数据包档案是否生效。 */

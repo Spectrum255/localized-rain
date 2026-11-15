@@ -1,6 +1,6 @@
 # 移动天气系统（mobile 模式）
 
-> 内部实现参考。对外发布说明见 `docs/release-1.2.0-preview.md`。
+> 内部实现参考。对外发布说明见 `docs/release-1.0.0-preview.md`。
 
 本文描述 `weatherMode = "mobile"` 下的风暴系统：数据模型、推进流程、客户端同步与已知限制。
 它和「3D 群系片」（`patches`）、「完全原版」（`vanilla`）互斥，同一时刻只有一套系统决定天气。
@@ -45,7 +45,7 @@ WeatherManager.tick
             ├─ 逐风暴：远离淡出 / StormEvolution / 阶段切换 / StormObject.tick（移动、强度、寿命）
             ├─ 变更或到达同步间隔 → broadcast(全量快照)
             ├─ 维度级 rain/thunder 取所有风暴最大值写回 level
-            ├─ spawnLightning（按玩家 × 风暴抽签，BAND 也支持）
+            ├─ spawnLightning（按风暴抽签，落点跟随被覆盖玩家；BAND 也支持）
             ├─ sendHud（HUD 用 WeatherStatePayload）
             └─ StormSpawner.tick（自然生成，受维度/玩家上限约束）
 ```
@@ -65,7 +65,7 @@ WeatherManager.tick
 
 ## 5. 配置（仅 mobile 有效）
 
-见 README 的「移动天气」表。1.2.0-preview 新增：
+见 README 的「移动天气」表。移动模式新增：
 
 - `maxManualStormsPerDimension`（默认 16，范围 0–128）：手动风暴按维度计数，0 表示禁用；
   对同一片区域重复设置同类型天气会替换旧风暴。
@@ -80,7 +80,7 @@ API：`WeatherApi.spawnStorm` / `removeStorms` / `storms` / `dominantStormAt` / 
 事件 `StormSpawnEvent`（可取消）、`StormRemoveEvent`（`MANUAL` / `FINISHED` / `FAR_AWAY` /
 `MISSING_PROFILE` / `CLEARED`）、`StormStageChangeEvent`。
 
-## 7. 1.2.0-preview 修复内容
+## 7. 移动模式修复内容（已并入 1.0.0-preview）
 
 1. 原版 `setWeatherParameters` / 手动天气不再无限堆积风暴：新增手动上限，并按「玩家附近同类型替换」去重。
 2. `/weather clear`、睡觉跳夜、原版清天气统一走 `removeWhere(..., CLEARED, true)`：发事件并立即广播，

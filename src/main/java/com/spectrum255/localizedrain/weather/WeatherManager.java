@@ -27,8 +27,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.LightningBolt;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.biome.Biome;
@@ -380,32 +378,8 @@ public final class WeatherManager {
             data.tickManual(random, manual, gameTime, ticks, cycleWeather);
         }
 
-        float maximumRain = 0.0F;
-        float maximumThunder = 0.0F;
-        for (String patch : cycling) {
-            WeatherData.WeatherState state = data.get(patch);
-            if (state != null) {
-                maximumRain = Math.max(maximumRain, state.rainLevel());
-                maximumThunder = Math.max(maximumThunder, state.thunderLevel());
-            }
-        }
-        for (String patch : held) {
-            WeatherData.WeatherState state = data.get(patch);
-            if (state != null) {
-                maximumRain = Math.max(maximumRain, state.rainLevel());
-                maximumThunder = Math.max(maximumThunder, state.thunderLevel());
-            }
-        }
-        for (String patch : manual) {
-            WeatherData.WeatherState state = data.get(patch);
-            if (state != null) {
-                maximumRain = Math.max(maximumRain, state.rainLevel());
-                maximumThunder = Math.max(maximumThunder, state.thunderLevel());
-            }
-        }
-        // 维度级雨/雷量仍取所有推进过的片的最大值，供原版刷怪/天空亮度等维度级判定使用
-        level.setRainLevel(maximumRain);
-        level.setThunderLevel(maximumThunder);
+        // 不再把局部最大值写回维度级 rainLevel/thunderLevel：否则 Level#isRaining() 会让第三方逻辑全维度生效。
+        // 客户端渲染仍由逐玩家发包驱动；第三方模组应改用 WeatherApi 的按位置查询。
     }
 
     private static void classify(ServerLevel level, WeatherData data, String patch, Set<String> cycling,
@@ -464,6 +438,21 @@ public final class WeatherManager {
             case VANILLA -> vanillaRainingAt(level, pos);
             case PATCHES -> patchesIsRainingAt(level, pos);
         };
+    }
+
+    /** 维度内是否有任意片/风暴正在降水：仅用于把原版维度级判定（例如睡觉清天气）局部化。 */
+    public static boolean hasLocalPrecipitation(ServerLevel level) {
+        if (mobileMode()) {
+            return StormManager.anyPrecipitation(level);
+        }
+        WeatherData data = data(level);
+        for (String patch : data.patches()) {
+            WeatherData.WeatherState state = data.get(patch);
+            if (state != null && state.isRaining()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean patchesIsRainingAt(ServerLevel level, BlockPos pos) {
@@ -764,13 +753,8 @@ public final class WeatherManager {
             if (!isThunderingAt(level, pos)) {
                 continue;
             }
-            LightningBolt bolt = EntityType.LIGHTNING_BOLT.create(level);
-            if (bolt == null) {
-                continue;
-            }
-            bolt.moveTo(Vec3.atBottomCenterOf(pos));
-            bolt.setVisualOnly(false);
-            level.addFreshEntity(bolt);
+            // 与原版 tickChunk 相同的陷阱概率；抽到骷髅马时闪电只做视觉效果
+            WeatherLightning.strike(level, pos, random);
         }
     }
 

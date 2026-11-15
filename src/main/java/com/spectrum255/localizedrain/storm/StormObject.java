@@ -1,10 +1,13 @@
 package com.spectrum255.localizedrain.storm;
 
 import com.spectrum255.localizedrain.api.StormProfile;
+import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSnapshot;
 import java.util.UUID;
+import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 
 /** 单个风暴：水平圆 + 竖直区间，无三维体积。 */
 final class StormObject {
@@ -13,6 +16,10 @@ final class StormObject {
 
     UUID id;
     ResourceLocation profileId;
+    /** 解析后的档案引用：每 tick 的查询会调用几十次，避免反复走注册表 Optional。 */
+    private StormProfile cachedProfile;
+    /** 是否已经解析过（用来区分「尚未解析」与「解析失败」）。 */
+    private boolean profileResolved;
     /** 手动风暴指定的天气类型；非 null 时压过档案阶段类型。 */
     ResourceLocation typeOverride;
     StormProfile.VerticalMode verticalMode = StormProfile.VerticalMode.SURFACE;
@@ -75,6 +82,22 @@ final class StormObject {
     }
 
     public UUID id() { return this.id; }
+
+    /** 解析并缓存档案；数据包重载或服务器停止时由 StormManager 清空。未知档案只解析一次，避免每 tick 回源。 */
+    StormProfile resolveProfile(ServerLevel level) {
+        if (!this.profileResolved) {
+            this.cachedProfile = StormProfiles.byId(level, this.profileId)
+                    .map(Holder.Reference::value)
+                    .orElse(null);
+            this.profileResolved = true;
+        }
+        return this.cachedProfile;
+    }
+
+    void clearProfileCache() {
+        this.cachedProfile = null;
+        this.profileResolved = false;
+    }
     public ResourceLocation profileId() { return this.profileId; }
     public StormProfile.VerticalMode verticalMode() { return this.verticalMode; }
     /** 生效的天气类型：手动覆盖优先，否则取当前阶段类型。 */
