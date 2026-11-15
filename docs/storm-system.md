@@ -1,6 +1,6 @@
 # 移动天气系统（mobile 模式）
 
-> 内部实现参考。对外发布说明见 `docs/release-1.0.0-alpha.md`。
+> 内部实现参考。对外介绍见 `docs/introduction.md`。
 
 本文描述 `weatherMode = "mobile"` 下的风暴系统：数据模型、推进流程、客户端同步与已知限制。
 它和「3D 群系片」（`patches`）、「完全原版」（`vanilla`）互斥，同一时刻只有一套系统决定天气。

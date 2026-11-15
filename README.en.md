@@ -300,7 +300,7 @@ The artifact is `build/libs/localizedrain-<version>.jar`.
 
 - [docs/idea.md](docs/idea.md): design goal
 - [docs/storm-system.md](docs/storm-system.md): mobile weather system (internal reference: architecture, data model, config, commands, API, sync and known limitations)
-- [docs/release-1.0.0-alpha.md](docs/release-1.0.0-alpha.md): 1.0.0-alpha release notes (mobile weather system, filter rules, storm consistency fixes)
+- [docs/introduction.md](docs/introduction.md): mod introduction and configuration (three modes, filter semantics, mobile weather, compatibility)
 
 ## License
 
