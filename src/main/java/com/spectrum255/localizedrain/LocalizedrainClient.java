@@ -25,8 +25,16 @@ public class LocalizedrainClient {
         // Do not forget to add translations for your config options in the en_us.json file.
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
         // 可选兼容：Xaero 天气行（HUD 即时切换），没装 Xaero 时这里不会加载任何 Xaero 类
-        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> ClientWeatherHooks.onClientTick());
-        NeoForge.EVENT_BUS.addListener((ClientPlayerNetworkEvent.LoggingOut event) -> ClientWeatherHooks.onLoggingOut());
+        NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> {
+            ClientWeatherHooks.onClientTick();
+            // 风暴位置每 tick 外推，再按距离/高度算目标雨雷量写回原版通道
+            com.spectrum255.localizedrain.client.ClientStormCache.tick();
+            com.spectrum255.localizedrain.client.ClientStormWeather.tick(Minecraft.getInstance());
+        });
+        NeoForge.EVENT_BUS.addListener((ClientPlayerNetworkEvent.LoggingOut event) -> {
+            ClientWeatherHooks.onLoggingOut();
+            com.spectrum255.localizedrain.client.ClientStormCache.clear();
+        });
         ClientWeatherHooks.tryInstallXaero();
     }
 

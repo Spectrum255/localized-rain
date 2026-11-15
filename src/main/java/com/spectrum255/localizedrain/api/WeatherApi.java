@@ -1,9 +1,14 @@
 package com.spectrum255.localizedrain.api;
 
+import com.spectrum255.localizedrain.Config;
+import com.spectrum255.localizedrain.storm.StormManager;
+import com.spectrum255.localizedrain.storm.WindField;
 import com.spectrum255.localizedrain.weather.WeatherManager;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -88,6 +93,15 @@ public final class WeatherApi {
      * @return 位置无对应群系片（世界外或解析失败）时返回 {@code false}
      */
     public static boolean setWeatherAt(ServerLevel level, BlockPos pos, ResourceLocation typeId, int duration) {
+        if (WeatherMode.current() == WeatherMode.MOBILE) {
+            int radius = WindField.intConfig(Config.MANUAL_STORM_RADIUS, 128);
+            if (WeatherTypes.CLEAR_ID.equals(typeId)) {
+                // clear 不是「生成晴天风暴」，而是移除覆盖该位置的风暴：成功与否都算处理过
+                StormManager.spawnManual(level, pos, typeId, radius, duration);
+                return true;
+            }
+            return StormManager.spawnManual(level, pos, typeId, radius, duration) != null;
+        }
         String patch = WeatherManager.patchAt(level, pos);
         if (patch == null) {
             return false;
@@ -95,4 +109,62 @@ public final class WeatherApi {
         WeatherManager.setWeather(level, List.of(patch), typeId, duration);
         return true;
     }
+
+    // ---- 移动天气：查询 ----
+    /** 当前天气接管模式。 */
+    public static WeatherMode weatherMode() { return WeatherMode.current(); }
+
+    /** 覆盖该坐标的全部风暴快照（不含群系隔离判定）。 */
+    public static List<StormSnapshot> stormsAt(ServerLevel level, BlockPos pos) {
+        List<StormSnapshot> result = new ArrayList<>();
+        double px = pos.getX() + 0.5D;
+        double py = pos.getY() + 0.5D;
+        double pz = pos.getZ() + 0.5D;
+        for (StormSnapshot snapshot : StormManager.snapshots(level)) {
+            if (snapshot.covers(px, py, pz)) {
+                result.add(snapshot);
+            }
+        }
+        return result;
+    }
+
+    /** 该维度全部风暴快照。 */
+    public static List<StormSnapshot> listStorms(ServerLevel level) {
+        return StormManager.snapshots(level);
+    }
+
+    /** 按 id 取风暴快照，不存在返回 null。 */
+    public static StormSnapshot storm(ServerLevel level, UUID id) {
+        return StormManager.snapshotById(level, id);
+    }
+
+    /** 该维度当前风场。 */
+    public static WindState wind(ServerLevel level) { return StormManager.wind(level); }
+
+    /** 该位置是否处于风暴隔离群系。 */
+    public static boolean isStormIsolatedAt(ServerLevel level, BlockPos pos) {
+        return StormManager.isIsolatedAt(level, pos);
+    }
+
+    // ---- 移动天气：写入 ----
+    /** 生成风暴；档案缺失或被事件取消时返回 null。 */
+    public static StormSnapshot spawnStorm(ServerLevel level, StormSpawnSpec spec) {
+        return StormManager.spawn(level, spec);
+    }
+
+    /** 按 id 移除风暴。 */
+    public static boolean removeStorm(ServerLevel level, UUID id) {
+        return StormManager.remove(level, id);
+    }
+
+    /** 按快照谓词批量移除，返回移除数量。 */
+    public static int removeStorms(ServerLevel level, java.util.function.Predicate<StormSnapshot> filter) {
+        return StormManager.removeWhere(level, filter);
+    }
+
+    public static boolean advanceStage(ServerLevel level, UUID id) { return StormManager.advanceStage(level, id); }
+    public static boolean setStage(ServerLevel level, UUID id, int index) { return StormManager.setStage(level, id, index); }
+    public static boolean setVelocity(ServerLevel level, UUID id, double x, double z) { return StormManager.setVelocity(level, id, x, z); }
+    public static boolean setIntensity(ServerLevel level, UUID id, float rain, float thunder) { return StormManager.setIntensity(level, id, rain, thunder); }
+    public static void setWind(ServerLevel level, double x, double z) { StormManager.setWind(level, x, z); }
 }

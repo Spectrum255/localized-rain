@@ -31,24 +31,39 @@
 - 原版的雨/雷量、天空亮度、亡灵燃烧、雷暴刷怪都按「实体所在片」局部化。
 - 雷暴片会按原版密度显式生成闪电（1/100000 每区块每 tick 的等价概率），不再依赖原版只对全局雷暴生效的抽签。
 - 客户端渲染与雨声沿用服务端按玩家做的 0.01/tick 平滑，跨片约 5 秒渐变。
-- 支持按生物群系配置天气白名单、黑名单、强制天气，以及**候选天气**（每个群系可配置一组可能出现的类型，
-  随机阶段结束时抽签）；内置 `clear`/`rain`/`thunder`，也可以是附属模组注册的任意类型（见下方「配置」）。
+- 支持按生物群系配置天气白名单、黑名单与强制天气，格式统一为「群系=天气」：白名单限定该群系的天气池，
+  黑名单从池中剔除指定天气，强制天气让该群系固定为一种天气。天气类型可以是内置 `clear`/`rain`/`thunder`、
+  附属模组注册的任意类型，或用标签 `#localizedrain:dry` 引用一组类型（见下方「配置」）。
 - 性能：列扫描有每 tick 预算（`maxColumnScansPerTick` + 2ms/tick，超预算的位置下次再算）；
   扫描按「整列一次、分类全部段」执行；天气热查询按 quart 格做 LRU 缓存；
   状态推进支持一次前进 N tick（计时器不翻转时用闭式快进），扫描间隔不再带来额外 CPU 开销。
 - 天气类型是一个独立的 NeoForge 注册表（`localizedrain:weather_type`），附属模组可以注册自己的类型，
   并通过 `WeatherApi` 查询/设置；服务端判定（`isRainingAt`、`isPrecipitatingAt`、`isThunderingAt` 等）
   全部按类型工作。详见下方「天气类型（lib API）」。
+- 新增**移动天气模式**（`weatherMode`）：风暴是「水平圆 + 竖直区间」，可随风漂移、按档案阶段演化；
+  与原有的群系片模式、纯原版模式严格互斥。详见「三种天气模式」。
+
+## 三种天气模式
+
+`weatherMode` 三选一，默认 `patches`；三种模式严格互斥，同一时刻只有一套系统在推进天气：
+
+| 模式 | 行为 | 备注 |
+|---|---|---|
+| `patches` | 默认。3D 群系片天气：每个 16×16 列的群系段独立判定、按片推进。 | 原有行为，完全不变 |
+| `mobile` | 独立的风暴系统：风暴是水平圆 + 竖直区间，随风移动、按档案阶段演化；客户端按玩家到风暴的距离与高度计算目标雨雷量，平滑复用原版雨雪/雷通道。 | 没有风暴（自然生成或命令/API）时全晴 |
+| `vanilla` | 完全交还原版：模组所有天气注入直通（Mixin 直接放行），不再接管降水、天空亮度与落雷。 | 适合与其它天气模组共存 |
+
+模式只能改配置文件里的 `weatherMode`，**切换必须重启游戏**；各模式的存档数据互相保留，切回后继续生效。
 
 ## 配置
 
 `config/localizedrain-common.toml`：
 
 ```toml
+weatherMode = "patches"
 weatherBiomeWhitelist = []
 weatherBiomeBlacklist = []
 weatherBiomeOverrides = []
-weatherBiomeCandidates = []
 weatherSimulationIntervalTicks = 20
 scan3dSubstates = true
 stateRetentionDays = 7
@@ -81,22 +96,80 @@ debugLogging = false
 `debugLogging`（默认 false）打开后每 20 tick 输出 `[LRDBG]` 日志（玩家片、列扫描耗时、合并数量），
 用于排查归属问题。
 
-`weatherBiomeCandidates` 为群系配置「可能出现的天气」：`<群系选择器>=<类型>|<类型>`，也可以写成
-`<选择器>={类型1, 类型2}`。阶段结束时随机抽取一种；候选类型自动视为允许，优先于内置晴/雨/雷循环；
-不降水的候选不会抬高雨量，雷只在类型允许时出现。
+`weatherBiomeCandidates` 已删除（旧配置项会被忽略）。三条名单统一使用「`<群系选择器>=<天气>`」：
 
-- **白名单**：为空表示全部允许；非空时只有名单内的群系参与局地天气。
-- **黑名单**：永远晴天（不推进天气、不落雷、不积雪）。
-- **强制天气**：`<群系选择器>=<天气类型 id>`，例如 `minecraft:desert=clear`、`minecraft:*=rain`、
-  `#minecraft:is_ocean=thunder`，也可以写任意已注册的类型，例如
-  `minecraft:desert=examplemod:sandstorm`。短名 `clear`/`rain`/`thunder` 等价于内置类型。
-  命中的群系片保持对应天气、不再随机切换；多条匹配时按配置顺序后者覆盖前者
-  （所以可以先用 `minecraft:*` 兜底，再对个别群系单独指定）。类型 id 是**惰性解析**的：
-  配置加载时不查注册表，判定时才解析，所以附属模组注册的类型可以直接写进配置。
-  强制天气在服务端会瞬时把雨/雷强度拉满并冻结计时器，客户端仍按 0.01/tick 平滑显示。
+- **白名单** `weatherBiomeWhitelist`：命中的群系自然循环只会在列出的天气里抽取（同一群系可以写多条）。
+  例如 `minecraft:plains=clear` 加 `minecraft:plains=localizedrain:rain` 让平原只有晴天和雨。
+  为空时使用默认自然池：先取数据包里的 `#localizedrain:natural` 标签，标签不存在则用内置晴/雨/雷。
+- **黑名单** `weatherBiomeBlacklist`：命中的群系永远不会出现列出的天气，但仍会在剩余天气里循环。
+  例如 `minecraft:desert=localizedrain:rain` 让沙漠不下雨，晴天/雷暴仍可能出现。
+- **强制天气** `weatherBiomeOverrides`：命中的群系永远只有这一种天气；同一群系命中多条规则时按配置顺序
+  **第一条**生效（可以先用 `minecraft:*` 兜底，再对个别群系单独指定）。类型 id 惰性解析，
+  附属模组注册的类型可以直接写。强制晴天是真正的锁定：命令与 API 也无法在该群系制造天气。
 
-优先级为 **强制天气 > 候选天气 > 黑名单 > 白名单**。被名单排除或被强制天气的群系会跳过 `/weather`
-并提示跳过数量。规则都为空时行为与之前一致。
+白名单/黑名单只约束自然循环：如果某个群系只是因为「自然池里只剩晴天」（例如白名单只写了 `clear`，
+或干燥群系默认剔除降水类型）而恒晴，命令与 API 仍然可以手动制造天气；只有**强制晴天**才是硬锁定。
+
+天气部分可以写类型 id（如 `weatherplus:blizzard`）、短名 `clear`/`rain`/`thunder`，
+或天气类型标签 `#localizedrain:dry`（标签只在白名单/黑名单里有效，强制天气必须写一种具体类型）。
+
+没有显式白名单的群系，如果本身不降水（`Biome#hasPrecipitation() == false`，例如原版下界/末地群系），
+会自动把「会降水或会打雷」的类型从池里剔除，所以默认永远是晴天，不需要再写强制规则。
+
+白名单与黑名单同时命中时黑名单优先（把对应天气从白名单池里剔除）。三条名单都为空时行为与之前一致。
+
+默认自然池 `#localizedrain:natural`：本模组**不内置**标签文件；数据包可以在
+`data/<namespace>/tags/localizedrain/weather_type/natural.json` 里定义它。定义后，所有没有显式白名单的
+群系都从该标签抽取天气（写成空列表表示默认不再自然变天）；标签不存在时回退到内置晴/雨/雷。
+
+### 移动天气（`weatherMode = "mobile"`）
+
+除 `weatherMode` 外，以下键只在 `mobile` 模式下有意义：
+
+```toml
+weatherMode = "patches"
+isolatedBiomeWeather = "clear"
+naturalCaveStorms = false
+caveStormRadius = 64
+maxStormsPerDimension = 8
+maxStormsPerPlayer = 2
+maxManualStormsPerDimension = 16
+spawnIntervalTicks = 200
+spawnMinDistance = 300
+spawnMaxDistance = 700
+windChangeIntervalTicks = 1200
+windMinSpeed = 0.02
+windMaxSpeed = 0.08
+despawnDistance = 1000
+despawnGraceTicks = 600
+manualStormRadius = 128
+vanillaCommandStormRadius = 512
+stormSyncIntervalTicks = 40
+falloffRatio = 0.3
+lightningMultiplier = 1.0
+```
+
+- `weatherMode`：`patches` / `mobile` / `vanilla`，默认 `patches`，未知取值回退 `patches` 并记警告；改动后必须重启游戏。
+- `isolatedBiomeWeather`：`#localizedrain:storm_isolated` 群系里的天气，默认 `clear`；`patch` 表示这些群系继续由片天气机独立推进，`manual` 表示平时晴天、只接受命令/API 设置。
+- `naturalCaveStorms`（默认 false）与 `caveStormRadius`（默认 64，范围 8–512）：是否允许地下自然生成风暴及其半径。
+- `maxStormsPerDimension`（默认 8，范围 0–64）：单个维度的自然风暴上限（手动风暴不占名额）；`maxStormsPerPlayer`（默认 2，范围 0–16）：归属单个玩家的自然风暴上限。
+- `maxManualStormsPerDimension`（默认 16，范围 0–128）：命令/API 手动风暴的维度上限，0 表示禁用；重复对同一片区域设置同类型天气会替换旧风暴而不是叠加。
+- `spawnIntervalTicks`（默认 200，范围 20–24000）：每多少 tick 尝试生成一个自然风暴。
+- `spawnMinDistance` / `spawnMaxDistance`（默认 300 / 700）：自然风暴与选中玩家的水平距离区间。
+- `windChangeIntervalTicks`（默认 1200）：维度风场做一次有界随机游走的间隔——风向在当前方向 ±30° 内摆动、风速在 ±0.01 内抖动；`windMinSpeed` / `windMaxSpeed`（默认 0.02 / 0.08 方块每 tick）把风速夹在区间内。
+- `despawnDistance`（默认 1000）与 `despawnGraceTicks`（默认 600）：自然风暴离所有玩家超过该距离并持续该时长后淡出。
+- `manualStormRadius`（默认 128）：`setWeatherAt` 生成手动风暴的默认半径；`/weather storm area` 也把它加在区域覆盖半径上。
+- `vanillaCommandStormRadius`（默认 512）：原版 `/weather rain|thunder` 为每位玩家生成手动风暴的半径。
+- 命令/API 生成的手动风暴速度固定为 0，不会随风漂移；生成时显式指定半径的手动风暴在阶段切换时也不会被重置为档案半径。
+- 自然风暴的生成点同样遵守天气过滤器：强制晴天、白名单池里没有该类型、或黑名单剔除了该类型时都不会生成；
+  被强制成某一种天气的群系只会生成该类型的风暴。
+- `/weather clear`、睡觉跳夜或原版清天气会发出 `StormRemoveEvent`（`Reason.CLEARED`）并立即同步给客户端。
+  `mobile` 模式下 `/weather clear` 清空该维度**全部**风暴（自然 + 手动）；睡觉跳夜只清自然风暴，保留手动风暴。
+- `stormSyncIntervalTicks`（默认 40）：完整风暴列表重新同步给客户端的间隔。
+- `falloffRatio`（默认 0.3）：风暴边缘渐变带宽占半径的比例。
+- 联机时客户端使用服务端下发的 `isolatedBiomeWeather` 与 `falloffRatio`（随风暴快照同步），
+  本地配置只在单人游戏或还没收到快照时生效。
+- `lightningMultiplier`（默认 1.0）：风暴落雷频率倍率。
 
 ## 命令
 
@@ -114,6 +187,34 @@ debugLogging = false
 `area` 按水平方向以 128 方块步长采样 `from`/`to` 覆盖到的群系片（上限 512 个采样点 / 64 片，
 单次最多触发 8 次列扫描，超出会提示缩小范围或先在该区域执行 `at`）；
 `global` 作用于当前维度里已经记录过的所有片。
+
+### `/weather storm`（`mobile` 模式）
+
+```
+/weather storm list
+/weather storm spawn <profile> [radius]
+/weather storm spawn <profile> <radius> band <minY> <maxY>
+/weather storm remove <id>|all
+/weather storm stage <id> <index>
+/weather storm advance <id>
+/weather storm intensity <id> <rain> <thunder>
+/weather storm wind <x> <z>
+/weather storm at <pos> <profile> [radius] [duration]
+/weather storm area <from> <to> <profile> [duration]
+/weather storm global <profile> [radius] [duration]
+```
+
+`profile` 是 `localizedrain:storm_profile` 注册表里的 id（有 Tab 补全；内置 `drizzle` / `shower` / `squall` / `thunderstorm`），
+`id` 是 `list` 输出里的风暴 UUID。
+
+- `spawn` 以执行者为圆心生成手动风暴；省略 `radius` 时使用档案的 `radius` 区间。`band <minY> <maxY>` 生成带竖直区间的风暴（洞穴/高空）。
+- `at` / `area` / `global`：`area` 以两角中点为中心、半径为水平对角距离的一半再加 `manualStormRadius`；`global` 为每位玩家各生成一个（半径默认 `vanillaCommandStormRadius`）；`duration` 省略时按档案阶段走完。
+- `remove all` 清空该维度的全部风暴（含手动风暴）；`remove <id>` 只删一个。
+- `intensity` 覆盖当前阶段的雨/雷强度（0–1）；`advance` 进入下一阶段；`stage` 跳到指定阶段（从 0 开始）；`wind` 直接改写维度风场。
+
+在 `mobile` 模式下，原有的 `/weather clear|rain|thunder` 也会走风暴系统：`clear` 清空该维度全部风暴（自然 + 手动），
+`rain` 以每位玩家为圆心生成一个半径 `vanillaCommandStormRadius` 的手动风暴，`thunder` 相同但类型是雷暴。
+`storm` 子树只在 `mobile` 模式下影响天气；其它模式下可以增删风暴数据，但天气仍由当前模式的系统决定。
 
 ## 天气类型（lib API）
 
@@ -144,6 +245,65 @@ WeatherApi.setWeather(level, patches, typeId, 6000);
 `patchAtCell(level, cellX, cellZ)` 仍按 16×16 列/区块坐标接收参数（内部换算到 quart）；
 需要 quart 坐标时用 `patchAtQuart(level, quartX, quartZ[, budget])`（片的分辨率仍是 16×16 列）。强度复用原版 `rainLevel`/`thunderLevel` 通道，客户端渲染保持原样。
 
+### 移动天气（`mobile` 模式）
+
+风暴档案是数据包注册表 `localizedrain:storm_profile`，JSON 放在 `data/<namespace>/storm_profile/<name>.json`：
+
+```json
+{
+  "weight": 20,
+  "natural": true,
+  "speed_multiplier": 1.0,
+  "radius": [150, 300],
+  "vertical": "surface",
+  "stages": [
+    {
+      "type": "localizedrain:rain",
+      "min_ticks": 4000,
+      "max_ticks": 8000,
+      "rain": [0.4, 0.8],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [1.0, 1.0]
+    }
+  ],
+  "environment": {
+    "stage_speed_from_moisture": true,
+    "moisture_gain": 0.002,
+    "moisture_decay": 0.001
+  }
+}
+```
+
+- `weight`（默认 10）是自然抽取权重，`natural`（默认 true）决定该档案是否进入自然池。
+- `speed_multiplier`（默认 1.0）是按风场移动的速度倍率。
+- `radius` 是 `[min, max]` 两元数组（默认 `[150, 300]`）。
+- `vertical` 取 `surface` / `band` / `column`：三者的水平圆与 `minY`–`maxY` 竖直范围判定相同，只有 `surface` 额外要求见天，`band` / `column` 用于洞穴与高空风暴。
+- `stages` 至少一项：`type`（天气类型 id）、`min_ticks` / `max_ticks`（默认 4000 / 8000）、`rain` / `thunder`（强度区间，默认 `[0.4, 0.8]` / `[0, 0]`）、`radius_scale`（半径倍率区间，默认 `[1, 1]`），可选 `advance_when_moisture` / `die_when_moisture`。
+- `environment`：`stage_speed_from_moisture`（默认 true）、`moisture_gain`（默认 0.002）、`moisture_decay`（默认 0.001）。
+
+内置档案：`drizzle`、`shower`、`squall`、`thunderstorm`。
+
+查询：`WeatherApi.weatherMode` / `stormsAt` / `listStorms` / `storm` / `wind` / `isStormIsolatedAt`。
+
+写入：`WeatherApi.spawnStorm` / `removeStorm` / `removeStorms` / `advanceStage` / `setStage` / `setVelocity` / `setIntensity` / `setWind`。
+
+```java
+StormSnapshot storm = WeatherApi.spawnStorm(level, StormSpawnSpec
+        .builder(ResourceLocation.fromNamespaceAndPath("localizedrain", "thunderstorm"), Vec3.atCenterOf(pos))
+        .radius(256)
+        .stage(0)
+        .manual(true)
+        .lifetime(6000)
+        .build());
+```
+
+事件：`StormSpawnEvent`（可取消）、`StormRemoveEvent`（`Reason` 为 `MANUAL` / `FINISHED` / `FAR_AWAY` / `MISSING_PROFILE` / `CLEARED`）、
+`StormStageChangeEvent`。
+
+无天气区：把群系加入群系标签 `#localizedrain:storm_isolated`
+（`data/<namespace>/tags/worldgen/biome/storm_isolated.json`）后，该群系内的风暴不产生雨、雷、闪电，天空也不变暗。
+`isolatedBiomeWeather` 控制这些群系的天气来源：`clear` 永远晴天，`patch` 继续用群系片天气机推进，`manual` 只在命令/API 设置时才有天气。
+
 ## 可选兼容
 
 **Xaero's Minimap**：装了才会启用，未装时不加载任何 Xaero 类，也不需要它参与编译。
@@ -172,12 +332,17 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 - 被清理机制删除的片没有持久天气记忆：再次加载时会从新的晴天周期开始。
 - 默认 1 秒的扫描间隔意味着天气切换（下雨/放晴）最多晚 1 秒生效；雨量渐变仍按 0.01/tick 输出。
 - 旧版（`p:`/`g:` 以及 `|biome` 子状态）存档 key 在载入时会被丢弃，不迁移旧天气状态。
-- 候选/自定义天气类型只有服务端的天气语义；粒子、音效、雾效需要附属模组自己渲染。
+- 自定义天气类型只有服务端的天气语义；粒子、音效、雾效需要附属模组自己渲染。
+- `mobile` 模式下 `WeatherApi.setWeather(level, patches, ...)`（按片 key 的旧入口）不生效，只会记录一次警告；
+  带坐标的 `setWeatherAt` 正常工作（生成一个单阶段手动风暴）。批量控制请改用 `spawnStorm` / `removeStorms`。
+- 地下 `BAND` 风暴的雨雪粒子是否会被原版的 `canSeeSky` 挡住尚未在游戏内验证；
+  如果被挡住，会追加一个窄范围的客户端 Mixin（实现计划 7.4 已预留）。
 
 ## 文档
 
 - `docs/idea.md`：设计目标
-- `docs/release-1.0.0-preview.md`：1.0.0-preview 发布说明（默认过滤器清空、手动天气覆盖名单）
+- `docs/storm-system.md`：移动天气系统（内部实现参考：架构、数据模型、配置、命令、API、同步与已知限制）
+- `docs/release-1.0.0-preview.md`：1.0.0-preview 发布说明（移动天气系统、过滤规则、风暴一致性修复）
 - `README.en.md`：README 的英文版
 
 ## 许可

@@ -1,9 +1,13 @@
 package com.spectrum255.localizedrain.weather;
 
 import com.spectrum255.localizedrain.Config;
+import com.spectrum255.localizedrain.api.StormTags;
+import com.spectrum255.localizedrain.api.WeatherMode;
 import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.network.WeatherStatePayload;
+import com.spectrum255.localizedrain.storm.StormManager;
+import com.spectrum255.localizedrain.storm.WindField;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -48,8 +52,6 @@ public final class WeatherManager {
      */
     private static final Map<ServerLevel, CellLookup> LOOKUPS = new WeakHashMap<>();
     private static final int MAX_LOOKUP_CELLS = 400_000;
-    /** 群系 id -> 是否有降水；群系注册表在运行期不变，可以一直缓存。 */
-    private static final Map<ResourceLocation, Boolean> BIOME_PRECIPITATION = new HashMap<>();
 
     /** 天空亮度公式里跟时间相关的部分，每 tick 刷新一次，避免光照查询里反复算 cos。 */
     private static ServerLevel dayFactorLevel;
@@ -73,6 +75,110 @@ public final class WeatherManager {
     private WeatherManager() {}
 
     public static void tick(ServerLevel level) {
+        switch (WeatherMode.current()) {
+            case PATCHES -> tickPatches(level);
+            case MOBILE -> tickMobile(level);
+            case VANILLA -> {
+                // Mixin 已在 VANILLA 下直通，不会走到这里；保留分支便于直接调用时安全
+            }
+        }
+    }
+
+    /** 移动天气：风暴为主；isolatedBiomeWeather=patch 时隔离群系的片仍由片机器推进。 */
+    private static void tickMobile(ServerLevel level) {
+        String isolatedMode = WindField.stringConfig(Config.ISOLATED_BIOME_WEATHER, "clear");
+        if ("patch".equals(isolatedMode)) {
+            tickIsolatedPatches(level);
+        }
+        StormManager.tick(level);       // 放在后面：维度级雨雷量以风暴为准
+    }
+
+    /** 非 null 时，只有通过该谓词的片会被分类与推进（移动模式下隔离群系的 patch 模式用）。 */
+    private static java.util.function.Predicate<String> patchFilter;
+
+    /** 只推进「包含隔离群系的片」，不做全维度扫描。 */
+    private static void tickIsolatedPatches(ServerLevel level) {
+        WeatherData data = data(level);
+        BiomePatches.beginTick(level);
+
+        // 与 tickPatches 一样按 simulationInterval 限频，否则片天气会以 interval 倍速推进
+        int interval = simulationInterval();
+        Integer counter = SWEEP_COUNTERS.get(level);
+        int age = (counter == null ? 0 : counter) + 1;
+        if (age >= interval) {
+            age = 0;
+            boolean cycleWeather = level.getGameRules().getBoolean(GameRules.RULE_WEATHER_CYCLE);
+            Set<String> playerPatches = new HashSet<>();
+            for (ServerPlayer player : level.players()) {
+                String patch = BiomePatches.patchAt(level, player.blockPosition());
+                if (patch != null && isIsolatedPatch(level, patch)) {
+                    playerPatches.add(patch);
+                }
+            }
+            patchFilter = patch -> isIsolatedPatch(level, patch);
+            try {
+                sweep(level, data, cycleWeather, interval, playerPatches);
+            } finally {
+                patchFilter = null;
+            }
+        }
+        SWEEP_COUNTERS.put(level, age);
+
+        // 隔离片的状态由服务端逐玩家包驱动客户端雨/雷通道（patch 模式下客户端不自行覆盖）。
+        // send 内部按 0.01/tick 平滑并去重，所以这里每 tick 调用不会产生额外流量。
+        for (ServerPlayer player : level.players()) {
+            String patch = BiomePatches.patchAt(level, player.blockPosition());
+            if (patch == null || !isIsolatedPatch(level, patch)) {
+                continue;
+            }
+            WeatherData.WeatherState state = data.get(patch);
+            if (state != null) {
+                send(player, state);
+            }
+        }
+        // 这个缓存只服务本轮查询，且未按维度分区，逐 tick 清空避免跨维度串味
+        ISOLATED_PATCH_CACHE.clear();
+    }
+
+    /** 片所属群系是否被标记为隔离；sweep 期间同一片只解析一次。 */
+    private static final Map<String, Boolean> ISOLATED_PATCH_CACHE = new HashMap<>();
+
+    private static boolean isIsolatedPatch(ServerLevel level, String patch) {
+        return ISOLATED_PATCH_CACHE.computeIfAbsent(patch, key -> {
+            ResourceLocation id = BiomePatches.patchBiome(level, key);
+            if (id == null) {
+                return false;
+            }
+            return level.registryAccess().registryOrThrow(Registries.BIOME)
+                    .getHolder(id)
+                    .map(holder -> holder.is(StormTags.STORM_ISOLATED))
+                    .orElse(false);
+        });
+    }
+
+    /** VANILLA 模式下 Mixin 直接放行原版逻辑。 */
+    public static boolean vanillaMode() {
+        return WeatherMode.current() == WeatherMode.VANILLA;
+    }
+
+    public static boolean mobileMode() {
+        return WeatherMode.current() == WeatherMode.MOBILE;
+    }
+
+    /** 片入口在移动模式下没有映射，只警告一次，避免每 tick 刷日志。 */
+    private static boolean warnedPatchApi;
+
+    private static void warnPatchApiUnsupported() {
+        if (warnedPatchApi) {
+            return;
+        }
+        warnedPatchApi = true;
+        com.spectrum255.localizedrain.Localizedrain.LOGGER.warn(
+                "[localizedrain] setWeather(patches, ...) has no effect in mobile mode; "
+                        + "use setWeatherAt / spawnStorm instead");
+    }
+
+    private static void tickPatches(ServerLevel level) {
         // 天气按维度独立推进；无天光维度（下界/末地等）同样参与，是否真的出现天气由群系降水类型、
         // 名单与命令/API 决定（原版下界/末地群系本身没有降水，默认仍然是晴天）
         // 本 tick 的群系轮廓填充预算：跨入新群系的填充最多做两片，多出来的推迟到后续 tick
@@ -129,7 +235,8 @@ public final class WeatherManager {
             }
             WeatherData.WeatherState state = data.get(patch);
             WeatherBiomeFilter.Decision decision = WeatherBiomeFilter.decision(level, patch);
-            if (state == null || (!decision.allowed() && (decision.locked() || !state.isManual()))) {
+            if (state == null || decision.hardLock()
+                    || (decision.locked() && !state.isManual())) {
                 send(player, WeatherData.WeatherState.clearDefault());
             } else {
                 send(player, state);
@@ -305,6 +412,9 @@ public final class WeatherManager {
                                  Map<String, WeatherBiomeFilter.Forced> forcedByPatch, Set<String> pinnedClear,
                                  Map<String, List<WeatherBiomeFilter.Candidate>> candidateByPatch,
                                  Set<String> manual) {
+        if (patchFilter != null && !patchFilter.test(patch)) {
+            return;                     // 移动模式：非隔离片一律不接管
+        }
         if (patch == null || cycling.contains(patch) || manual.contains(patch)
                 || forcedByPatch.containsKey(patch) || pinnedClear.contains(patch)) {
             return;
@@ -315,38 +425,23 @@ public final class WeatherManager {
             forcedByPatch.put(patch, decision.forced());
             return;
         }
-        if (decision.locked()) {
-            // 强制晴天锁定优先于手动覆盖
+        if (decision.hardLock()) {
+            // 强制晴天：真正的锁定，指令/API/自然循环都无法覆盖
             pinnedClear.add(patch);
             return;
         }
         if (data.isManual(patch)) {
-            // 指令/API 手动覆盖优先于白名单/黑名单：只走手动计时器，不参与自然循环
+            // 指令/API 手动覆盖：只走手动计时器，不参与自然循环
             manual.add(patch);
             return;
         }
-        if (!decision.candidates().isEmpty()) {
-            // 候选天气本身就是“允许发生”，不受白名单/降水类型限制
-            candidateByPatch.put(patch, decision.candidates());
-            cycling.add(patch);
-            return;
-        }
-        if (!decision.allowed()
-                || (!hasPrecipitation(level, patch) && !allowsNoSkylightWeather(level, data, patch)
-                    && !WeatherBiomeFilter.explicitlyWhitelisted(level, patch))) {
+        if (decision.locked()) {
+            // 软锁定：自然池里只剩晴天（名单剔除、干燥群系默认），手动天气仍然有效
             pinnedClear.add(patch);
             return;
         }
+        candidateByPatch.put(patch, decision.pool());
         cycling.add(patch);
-    }
-
-    /** 无天光维度里允许命令/API 显式设置的天气在无降水群系中按自己的时长走完。 */
-    private static boolean allowsNoSkylightWeather(ServerLevel level, WeatherData data, String patch) {
-        if (level.dimensionType().hasSkyLight()) {
-            return false;
-        }
-        WeatherData.WeatherState state = data.get(patch);
-        return state != null && !WeatherTypes.CLEAR_ID.equals(state.typeId());
     }
 
     /** 取（必要时计算）该位置所在群系范围的标识。 */
@@ -354,8 +449,24 @@ public final class WeatherManager {
         return BiomePatches.patchAt(level, pos);
     }
 
+    /** 原版语义的 isRainingAt（不经过本模组的 Mixin，避免递归）。 */
+    private static boolean vanillaRainingAt(ServerLevel level, BlockPos pos) {
+        return level.isRaining()
+                && level.getBiome(pos).value().getPrecipitationAt(pos) == Biome.Precipitation.RAIN
+                && level.canSeeSky(pos)
+                && level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, pos).getY() <= pos.getY();
+    }
+
     /** 原版 isRainingAt 的完整语义：局部天气 + 头顶无遮挡 + 未被方块挡住 + 该群系确实降的是雨。 */
     public static boolean isRainingAt(ServerLevel level, BlockPos pos) {
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.isRainingAt(level, pos);
+            case VANILLA -> vanillaRainingAt(level, pos);
+            case PATCHES -> patchesIsRainingAt(level, pos);
+        };
+    }
+
+    private static boolean patchesIsRainingAt(ServerLevel level, BlockPos pos) {
         WeatherData.WeatherState state = stateAt(level, pos);
         WeatherType type = WeatherTypes.byId(level, state.typeId());
         return type.hasPrecipitation()
@@ -366,12 +477,28 @@ public final class WeatherManager {
 
     /** 降水（积雪、炼药锅、水结冰）只看局部天气，降水类型由原版按群系自行判断。 */
     public static boolean isPrecipitatingAt(ServerLevel level, BlockPos pos) {
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.isPrecipitatingAt(level, pos);
+            case VANILLA -> level.isRaining();
+            case PATCHES -> patchesIsPrecipitatingAt(level, pos);
+        };
+    }
+
+    private static boolean patchesIsPrecipitatingAt(ServerLevel level, BlockPos pos) {
         WeatherData.WeatherState state = stateAt(level, pos);
         return WeatherTypes.byId(level, state.typeId()).hasPrecipitation()
                 && state.isRaining();
     }
 
     public static boolean isThunderingAt(ServerLevel level, BlockPos pos) {
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.isThunderingAt(level, pos);
+            case VANILLA -> level.isThundering() && vanillaRainingAt(level, pos);
+            case PATCHES -> patchesIsThunderingAt(level, pos);
+        };
+    }
+
+    private static boolean patchesIsThunderingAt(ServerLevel level, BlockPos pos) {
         WeatherData.WeatherState state = stateAt(level, pos);
         return dimensionAllowsThunder(level)
                 && WeatherTypes.byId(level, state.typeId()).allowsThunder()
@@ -396,6 +523,14 @@ public final class WeatherManager {
      * 原版刷怪判定用它决定要不要额外减 10 点光照，必须按位置而不是整个维度来算。
      */
     public static boolean isThunderingRegionAt(ServerLevel level, BlockPos pos) {
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.isThunderingRegionAt(level, pos);
+            case VANILLA -> level.isThundering();
+            case PATCHES -> patchesIsThunderingRegionAt(level, pos);
+        };
+    }
+
+    private static boolean patchesIsThunderingRegionAt(ServerLevel level, BlockPos pos) {
         WeatherData.WeatherState state = stateAt(level, pos);
         return dimensionAllowsThunder(level)
                 && WeatherTypes.byId(level, state.typeId()).allowsThunder()
@@ -415,6 +550,14 @@ public final class WeatherManager {
         if (level == null || pos == null) {
             return 0.0F;
         }
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.thunderLevelAt(level, pos);
+            case VANILLA -> level.getThunderLevel(1.0F);
+            case PATCHES -> patchesThunderLevelAt(level, pos);
+        };
+    }
+
+    private static float patchesThunderLevelAt(ServerLevel level, BlockPos pos) {
         WeatherData.WeatherState state = stateOrNull(level, pos);
         if (state == null) {
             return 0.0F;
@@ -432,9 +575,22 @@ public final class WeatherManager {
      * 用它替换维度级的 getSkyDarken() 后，局部下雨/雷暴才不会把整张地图的亮度一起压低。
      */
     public static int skyDarkenAt(ServerLevel level, BlockPos pos) {
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.skyDarkenAt(level, pos);
+            case VANILLA -> skyDarkenFor(level, level.getRainLevel(1.0F), level.getThunderLevel(1.0F));
+            case PATCHES -> patchesSkyDarkenAt(level, pos);
+        };
+    }
+
+    private static int patchesSkyDarkenAt(ServerLevel level, BlockPos pos) {
         WeatherData.WeatherState state = stateOrNull(level, pos);
         float rain = state == null ? 0.0F : state.rainLevel();
         float thunder = state == null ? 0.0F : state.thunderLevel();
+        return skyDarkenFor(level, rain, thunder);
+    }
+
+    /** 天空变暗公式（与原版 Level#updateSkyBrightness 一致），供片模式与风暴模式共用。 */
+    public static int skyDarkenFor(ServerLevel level, float rain, float thunder) {
         double rainFactor = 1.0 - (double) (rain * 5.0F) / 16.0;
         double thunderFactor = 1.0 - (double) (thunder * 5.0F) / 16.0;
         return (int) ((1.0 - dayFactor(level) * rainFactor * thunderFactor) * 11.0);
@@ -442,6 +598,22 @@ public final class WeatherManager {
 
     /** 该位置当前的天气类型（供 API/调试）；缓存未命中时现场解析一次，仍然没有记录才返回晴天。 */
     public static WeatherType weatherTypeAt(ServerLevel level, BlockPos pos) {
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.weatherTypeAt(level, pos);
+            case VANILLA -> vanillaWeatherTypeAt(level, pos);
+            case PATCHES -> patchesWeatherTypeAt(level, pos);
+        };
+    }
+
+    /** 原版语义只有「下雨 / 雷暴 / 晴天」三态。 */
+    private static WeatherType vanillaWeatherTypeAt(ServerLevel level, BlockPos pos) {
+        if (level.isThundering() && vanillaRainingAt(level, pos)) {
+            return WeatherTypes.THUNDER.get();
+        }
+        return level.isRaining() ? WeatherTypes.RAIN.get() : WeatherTypes.CLEAR.get();
+    }
+
+    private static WeatherType patchesWeatherTypeAt(ServerLevel level, BlockPos pos) {
         WeatherData.WeatherState state = stateOrNull(level, pos);
         if (state == null) {
             // 与 HUD 发包使用同一条可计算的解析路径，避免附属模组在缓存冷启动时误判为晴天
@@ -465,14 +637,7 @@ public final class WeatherManager {
             return null;
         }
         WeatherData.WeatherState state = data(level).get(patch);
-        WeatherBiomeFilter.Decision decision = WeatherBiomeFilter.decision(level, patch);
-        if (!decision.allowed() && decision.locked()) {
-            return null;
-        }
-        if (state != null && state.isManual()) {
-            return state;
-        }
-        if (!decision.allowed()) {
+        if (WeatherBiomeFilter.decision(level, patch).hardLock()) {
             return null;
         }
         return state;
@@ -491,12 +656,17 @@ public final class WeatherManager {
      */
     public static void setWeather(ServerLevel level, Collection<String> patches,
                                   ResourceLocation typeId, int duration) {
+        if (mobileMode()) {
+            // 移动模式没有「片」的概念，无法从片 key 反推坐标；坐标入口见 setWeatherAt / 命令 / 原版 /weather
+            warnPatchApiUnsupported();
+            return;
+        }
         if (typeId == null) {
             return;
         }
         WeatherType type = WeatherTypes.byId(level, typeId);
         Collection<String> allowed = patches.stream()
-                .filter(patch -> WeatherBiomeFilter.forcedWeather(level, patch) == null)
+                .filter(patch -> WeatherBiomeFilter.forcedType(level, patch) == null)
                 .toList();
         if (allowed.isEmpty()) {
             return;
@@ -508,6 +678,10 @@ public final class WeatherManager {
 
     /** 兼容层：把全局的 setWeatherParameters 调用翻译成「已记录的所有范围一起变天」。 */
     public static void setAll(ServerLevel level, boolean raining, boolean thundering, int duration) {
+        if (mobileMode()) {
+            StormManager.setAllFromVanilla(level, raining, thundering, duration);
+            return;
+        }
         Collection<String> patches = allPatches(level);
         if (patches.isEmpty()) {
             // 该维度还没有任何天气记录（例如刚进入下界）：退化为玩家所在片，让原版 /weather 也能生效
@@ -528,6 +702,10 @@ public final class WeatherManager {
 
     /** 跳过夜晚时调用：清空本维度所有范围的降雨/雷暴。 */
     public static void clearAll(ServerLevel level) {
+        if (mobileMode()) {
+            StormManager.clearNatural(level);
+            return;
+        }
         data(level).clearAll(level.getRandom());
     }
 
@@ -559,7 +737,7 @@ public final class WeatherManager {
             if (state != null
                     && state.isThundering()
                     && WeatherTypes.byId(level, state.typeId()).allowsThunder()
-                    && (decision.allowed() || (!decision.locked() && state.isManual()))) {
+                    && !decision.hardLock()) {
                 anyStormyPatch = true;
                 break;
             }
@@ -653,8 +831,7 @@ public final class WeatherManager {
             lookup.data = data(level);
         }
         WeatherData.WeatherState state = lookup.data.get(cached.patch());
-        if (!cached.decision().allowed()
-                && (cached.decision().locked() || state == null || !state.isManual())) {
+        if (cached.decision().hardLock()) {
             return null;
         }
         return state;
@@ -664,25 +841,6 @@ public final class WeatherManager {
     private static WeatherData.WeatherState stateAt(ServerLevel level, BlockPos pos) {
         WeatherData.WeatherState state = stateOrNull(level, pos);
         return state != null ? state : WeatherData.WeatherState.clearDefault();
-    }
-
-    /**
-     * 群系本身是否会产生降水。{@code Biome.Precipitation.NONE} 的群系（洞穴群系、浮岛群系等）
-     * 永远按晴天处理，不参与天气循环，也不会生成雷暴。
-     */
-    private static boolean hasPrecipitation(ServerLevel level, String patch) {
-        ResourceLocation biomeId = BiomePatches.patchBiome(level, patch);
-        if (biomeId == null) {
-            return true;
-        }
-        Boolean known = BIOME_PRECIPITATION.get(biomeId);
-        if (known != null) {
-            return known;
-        }
-        Biome biome = level.registryAccess().registryOrThrow(Registries.BIOME).get(biomeId);
-        boolean result = biome == null || biome.hasPrecipitation();
-        BIOME_PRECIPITATION.put(biomeId, result);
-        return result;
     }
 
     private static void send(ServerPlayer player, WeatherData.WeatherState state) {

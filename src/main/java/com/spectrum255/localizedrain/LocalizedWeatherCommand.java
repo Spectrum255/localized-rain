@@ -1,6 +1,9 @@
 package com.spectrum255.localizedrain;
 
+import com.mojang.brigadier.arguments.DoubleArgumentType;
+import com.mojang.brigadier.arguments.FloatArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -10,14 +13,22 @@ import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import com.spectrum255.localizedrain.Config;
+import com.spectrum255.localizedrain.api.StormProfiles;
+import com.spectrum255.localizedrain.api.StormSnapshot;
+import com.spectrum255.localizedrain.api.StormSpawnSpec;
 import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
+import com.spectrum255.localizedrain.api.WindState;
+import com.spectrum255.localizedrain.storm.StormManager;
+import com.spectrum255.localizedrain.storm.WindField;
 import com.spectrum255.localizedrain.weather.BiomePatches;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import net.minecraft.commands.CommandSourceStack;
@@ -31,6 +42,8 @@ import net.minecraft.core.Registry;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 public final class LocalizedWeatherCommand {
@@ -52,6 +65,13 @@ public final class LocalizedWeatherCommand {
 
     private static final SuggestionProvider<CommandSourceStack> TYPE_SUGGESTIONS =
             (context, builder) -> suggestTypes(context, builder);
+    private static final SuggestionProvider<CommandSourceStack> PROFILE_SUGGESTIONS =
+            (context, builder) -> {
+                for (ResourceLocation id : StormProfiles.ids(context.getSource().getLevel())) {
+                    builder.suggest(id.toString());
+                }
+                return builder.buildFuture();
+            };
 
     private LocalizedWeatherCommand() {}
 
@@ -67,7 +87,71 @@ public final class LocalizedWeatherCommand {
                 .then(mode("clear", context -> WeatherTypes.CLEAR_ID))
                 .then(mode("rain", context -> WeatherTypes.RAIN_ID))
                 .then(mode("thunder", context -> WeatherTypes.THUNDER_ID))
-                .then(Commands.literal("type").then(typeNode)));
+                .then(Commands.literal("type").then(typeNode))
+                .then(stormCommand()));
+    }
+
+    /** `/weather storm` 子树：移动模式下手动生成、改写与移除风暴的所有入口。 */
+    private static LiteralArgumentBuilder<CommandSourceStack> stormCommand() {
+        return Commands.literal("storm")
+                .then(Commands.literal("list").executes(LocalizedWeatherCommand::listStorms))
+                .then(Commands.literal("spawn")
+                        .then(Commands.argument("profile", ResourceLocationArgument.id())
+                                .suggests(PROFILE_SUGGESTIONS)
+                                .executes(context -> spawnStorm(context, Double.NaN))
+                                .then(Commands.argument("radius", DoubleArgumentType.doubleArg(16.0D, 4096.0D))
+                                        .executes(context -> spawnStorm(context, radius(context)))
+                                        .then(Commands.literal("band")
+                                                .then(Commands.argument("minY", DoubleArgumentType.doubleArg(-256.0D, 512.0D))
+                                                        .then(Commands.argument("maxY", DoubleArgumentType.doubleArg(-256.0D, 512.0D))
+                                                                .executes(LocalizedWeatherCommand::spawnStormBand)))))))
+                .then(Commands.literal("remove")
+                        .then(Commands.literal("all").executes(LocalizedWeatherCommand::removeAllStorms))
+                        .then(Commands.argument("id", StringArgumentType.word())
+                                .executes(LocalizedWeatherCommand::removeStorm)))
+                .then(Commands.literal("stage")
+                        .then(Commands.argument("id", StringArgumentType.word())
+                                .then(Commands.argument("index", IntegerArgumentType.integer())
+                                        .executes(LocalizedWeatherCommand::setStormStage))))
+                .then(Commands.literal("advance")
+                        .then(Commands.argument("id", StringArgumentType.word())
+                                .executes(LocalizedWeatherCommand::advanceStorm)))
+                .then(Commands.literal("intensity")
+                        .then(Commands.argument("id", StringArgumentType.word())
+                                .then(Commands.argument("rain", FloatArgumentType.floatArg(0.0F, 1.0F))
+                                        .then(Commands.argument("thunder", FloatArgumentType.floatArg(0.0F, 1.0F))
+                                                .executes(LocalizedWeatherCommand::setStormIntensity)))))
+                .then(Commands.literal("wind")
+                        .then(Commands.argument("x", DoubleArgumentType.doubleArg())
+                                .then(Commands.argument("z", DoubleArgumentType.doubleArg())
+                                        .executes(LocalizedWeatherCommand::setWind))))
+                .then(Commands.literal("at")
+                        .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                                .then(Commands.argument("profile", ResourceLocationArgument.id())
+                                        .suggests(PROFILE_SUGGESTIONS)
+                                        .executes(context -> spawnStormAt(context, Double.NaN, DEFAULT_DURATION))
+                                        .then(Commands.argument("radius", DoubleArgumentType.doubleArg(16.0D, 4096.0D))
+                                                .executes(context -> spawnStormAt(context, radius(context), DEFAULT_DURATION))
+                                                .then(Commands.argument("duration", TimeArgument.time(1))
+                                                        .executes(context -> spawnStormAt(context, radius(context),
+                                                                duration(context))))))))
+                .then(Commands.literal("area")
+                        .then(Commands.argument("from", BlockPosArgument.blockPos())
+                                .then(Commands.argument("to", BlockPosArgument.blockPos())
+                                        .then(Commands.argument("profile", ResourceLocationArgument.id())
+                                                .suggests(PROFILE_SUGGESTIONS)
+                                                .executes(context -> spawnStormArea(context, DEFAULT_DURATION))
+                                                .then(Commands.argument("duration", TimeArgument.time(1))
+                                                        .executes(context -> spawnStormArea(context, duration(context))))))))
+                .then(Commands.literal("global")
+                        .then(Commands.argument("profile", ResourceLocationArgument.id())
+                                .suggests(PROFILE_SUGGESTIONS)
+                                .executes(context -> spawnStormGlobal(context, Double.NaN, DEFAULT_DURATION))
+                                .then(Commands.argument("radius", DoubleArgumentType.doubleArg(16.0D, 4096.0D))
+                                        .executes(context -> spawnStormGlobal(context, radius(context), DEFAULT_DURATION))
+                                        .then(Commands.argument("duration", TimeArgument.time(1))
+                                                .executes(context -> spawnStormGlobal(context, radius(context),
+                                                        duration(context)))))));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> mode(
@@ -162,9 +246,9 @@ public final class LocalizedWeatherCommand {
 
     private static int apply(CommandSourceStack source, ServerLevel level, Set<String> patches,
                              ResourceLocation typeId, int duration) {
-        // 白/黑名单只约束自然循环：指令可以手动覆盖名单，但仍跳过被配置强制天气锁定的范围
+        // 白/黑名单只约束自然循环：指令可以手动覆盖名单；强制晴天是硬锁定，仍会跳过
         List<String> allowed = patches.stream()
-                .filter(patch -> WeatherBiomeFilter.forcedWeather(level, patch) == null)
+                .filter(patch -> WeatherBiomeFilter.forcedType(level, patch) == null)
                 .toList();
         int skipped = patches.size() - allowed.size();
         if (allowed.isEmpty()) {
@@ -198,6 +282,284 @@ public final class LocalizedWeatherCommand {
 
     private static int duration(CommandContext<CommandSourceStack> context) {
         return IntegerArgumentType.getInteger(context, "duration");
+    }
+
+    private static int listStorms(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        List<StormSnapshot> storms = StormManager.snapshots(level);
+        if (storms.isEmpty()) {
+            context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.none"), false);
+            return 0;
+        }
+        WindState wind = StormManager.wind(level);
+        for (StormSnapshot snapshot : storms) {
+            context.getSource().sendSuccess(() -> Component.literal(String.format(
+                    "%s profile=%s pos=(%.1f, %.1f) radius=%.1f y=[%.1f,%.1f] stage=%d/%d rain=%.2f thunder=%.2f manual=%s dying=%s windSpeed=%.3f",
+                    snapshot.id(), snapshot.profileId(), snapshot.x(), snapshot.z(),
+                    snapshot.radius(), snapshot.minY(), snapshot.maxY(),
+                    snapshot.stageIndex() + 1, snapshot.stageCount(),
+                    snapshot.rainIntensity(), snapshot.thunderIntensity(),
+                    snapshot.manual(), snapshot.dying(), wind.speed())), false);
+        }
+        return storms.size();
+    }
+
+    private static double radius(CommandContext<CommandSourceStack> context) {
+        return DoubleArgumentType.getDouble(context, "radius");
+    }
+
+    private static ResourceLocation profileId(CommandContext<CommandSourceStack> context) {
+        return ResourceLocationArgument.getId(context, "profile");
+    }
+
+    /** 解析 id 参数；格式非法时发送 bad_id 并返回 null。 */
+    private static UUID parseId(CommandContext<CommandSourceStack> context, String argument) {
+        try {
+            return UUID.fromString(argument);
+        } catch (IllegalArgumentException invalid) {
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.bad_id", argument));
+            return null;
+        }
+    }
+
+    /** 档案不存在 / 生成被事件取消时发送失败提示，成功返回快照。 */
+    private static StormSnapshot spawnChecked(CommandContext<CommandSourceStack> context,
+                                              ResourceLocation profileId, StormSpawnSpec.Builder builder) {
+        ServerLevel level = context.getSource().getLevel();
+        if (StormManager.profile(level, profileId) == null) {
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.unknown_profile", profileId.toString()));
+            return null;
+        }
+        warnIfNoSkylight(context);
+        StormSnapshot snapshot = StormManager.spawn(level, builder.build());
+        if (snapshot == null) {
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.spawn_failed", profileId.toString()));
+        }
+        return snapshot;
+    }
+
+    /** 无天光/有天花板维度里手动风暴没有雨雪可视效果，但会占名额并抬高维度雨量，提前说清楚。 */
+    private static void warnIfNoSkylight(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        if (!level.dimensionType().hasSkyLight() || level.dimensionType().hasCeiling()) {
+            context.getSource().sendSuccess(() -> Component.translatable(
+                    "commands.localizedrain.storm.no_skylight"), false);
+        }
+    }
+
+    /** 生成成功后统一回复 id、档案与半径；失败返回 0。 */
+    private static int reportSpawn(CommandContext<CommandSourceStack> context, ResourceLocation profileId,
+                                   StormSpawnSpec.Builder builder, String messageKey) {
+        StormSnapshot snapshot = spawnChecked(context, profileId, builder);
+        if (snapshot == null) {
+            return 0;
+        }
+        context.getSource().sendSuccess(() -> Component.translatable(messageKey,
+                snapshot.id().toString(), profileId.toString(), (int) snapshot.radius()), true);
+        return 1;
+    }
+
+    private static int spawnStorm(CommandContext<CommandSourceStack> context, double radius) {
+        ResourceLocation profileId = profileId(context);
+        StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, context.getSource().getPosition())
+                .manual(true);
+        if (!Double.isNaN(radius)) {
+            builder.radius(radius);
+        }
+        return reportSpawn(context, profileId, builder, "commands.localizedrain.storm.spawned");
+    }
+
+    /** `spawn <profile> <radius> band <minY> <maxY>`：带竖直区间的洞穴/高空气暴。 */
+    private static int spawnStormBand(CommandContext<CommandSourceStack> context) {
+        ResourceLocation profileId = profileId(context);
+        double minY = DoubleArgumentType.getDouble(context, "minY");
+        double maxY = DoubleArgumentType.getDouble(context, "maxY");
+        StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, context.getSource().getPosition())
+                .radius(radius(context))
+                .verticalBand(minY, maxY)
+                .manual(true);
+        return reportSpawn(context, profileId, builder, "commands.localizedrain.storm.spawned");
+    }
+
+    private static int spawnStormAt(CommandContext<CommandSourceStack> context, double radius, int duration) {
+        ResourceLocation profileId = profileId(context);
+        BlockPos pos = BlockPosArgument.getBlockPos(context, "pos");
+        StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, Vec3.atCenterOf(pos)).manual(true);
+        if (!Double.isNaN(radius)) {
+            builder.radius(radius);
+        }
+        if (duration > 0) {
+            builder.lifetime(duration);
+        }
+        return reportSpawn(context, profileId, builder, "commands.localizedrain.storm.at_spawned");
+    }
+
+    /** `area <from> <to> <profile> [duration]`：中心取两角中点，半径覆盖整个矩形。 */
+    private static int spawnStormArea(CommandContext<CommandSourceStack> context, int duration) {
+        ResourceLocation profileId = profileId(context);
+        BlockPos from = BlockPosArgument.getBlockPos(context, "from");
+        BlockPos to = BlockPosArgument.getBlockPos(context, "to");
+        Vec3 center = new Vec3(
+                (from.getX() + to.getX()) / 2.0D + 0.5D,
+                Math.max(from.getY(), to.getY()) + 0.5D,
+                (from.getZ() + to.getZ()) / 2.0D + 0.5D);
+        double horizontal = Math.hypot((double) from.getX() - to.getX(), (double) from.getZ() - to.getZ());
+        double radius = horizontal / 2.0D + WindField.intConfig(Config.MANUAL_STORM_RADIUS, 128);
+        StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, center)
+                .radius(radius)
+                .manual(true);
+        if (duration > 0) {
+            builder.lifetime(duration);
+        }
+        return reportSpawn(context, profileId, builder, "commands.localizedrain.storm.area_spawned");
+    }
+
+    /** `global <profile> [radius] [duration]`：为维度内每位玩家各生成一个手动风暴。 */
+    private static int spawnStormGlobal(CommandContext<CommandSourceStack> context, double radius, int duration) {
+        ServerLevel level = context.getSource().getLevel();
+        ResourceLocation profileId = profileId(context);
+        if (StormManager.profile(level, profileId) == null) {
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.unknown_profile", profileId.toString()));
+            return 0;
+        }
+        double actualRadius = Double.isNaN(radius)
+                ? WindField.intConfig(Config.VANILLA_COMMAND_STORM_RADIUS, 512)
+                : radius;
+        warnIfNoSkylight(context);
+        int cap = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);
+        int existing = StormManager.manualStormCount(level);
+        int players = level.players().size();
+        if (existing + players > cap) {
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.manual_limit", existing, cap));
+            return 0;
+        }
+        int spawned = 0;
+        for (ServerPlayer player : level.players()) {
+            StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, Vec3.atCenterOf(player.blockPosition()))
+                    .radius(actualRadius)
+                    .manual(true);
+            if (duration > 0) {
+                builder.lifetime(duration);
+            }
+            if (StormManager.spawn(level, builder.build()) != null) {
+                spawned++;
+            }
+        }
+        if (spawned == 0) {
+            context.getSource().sendFailure(Component.translatable(
+                    "commands.localizedrain.storm.spawn_failed", profileId.toString()));
+            return 0;
+        }
+        int count = spawned;
+        context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.global_spawned",
+                count, profileId.toString(), (int) actualRadius), true);
+        return count;
+    }
+
+    private static int setStormStage(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        String argument = StringArgumentType.getString(context, "id");
+        UUID id = parseId(context, argument);
+        if (id == null) {
+            return 0;
+        }
+        int index = IntegerArgumentType.getInteger(context, "index");
+        StormSnapshot snapshot = StormManager.snapshotById(level, id);
+        if (snapshot == null) {
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.missing", argument));
+            return 0;
+        }
+        if (index < 0 || index >= snapshot.stageCount()) {
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.bad_index",
+                    index, snapshot.stageCount() - 1));
+            return 0;
+        }
+        if (!StormManager.setStage(level, id, index)) {
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.stage_set_failed", argument));
+            return 0;
+        }
+        context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.stage_set",
+                argument, index + 1, snapshot.stageCount()), true);
+        return 1;
+    }
+
+    private static int advanceStorm(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        String argument = StringArgumentType.getString(context, "id");
+        UUID id = parseId(context, argument);
+        if (id == null) {
+            return 0;
+        }
+        if (StormManager.snapshotById(level, id) == null) {
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.missing", argument));
+            return 0;
+        }
+        if (!StormManager.advanceStage(level, id)) {
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.advance_failed", argument));
+            return 0;
+        }
+        StormSnapshot after = StormManager.snapshotById(level, id);
+        int stage = after == null ? 0 : after.stageIndex() + 1;
+        int total = after == null ? 0 : after.stageCount();
+        context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.advanced",
+                argument, stage, total), true);
+        return 1;
+    }
+
+    private static int setStormIntensity(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        String argument = StringArgumentType.getString(context, "id");
+        UUID id = parseId(context, argument);
+        if (id == null) {
+            return 0;
+        }
+        float rain = FloatArgumentType.getFloat(context, "rain");
+        float thunder = FloatArgumentType.getFloat(context, "thunder");
+        if (!StormManager.setIntensity(level, id, rain, thunder)) {
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.intensity_failed", argument));
+            return 0;
+        }
+        context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.intensity_set",
+                argument, rain, thunder), true);
+        return 1;
+    }
+
+    private static int setWind(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        double x = DoubleArgumentType.getDouble(context, "x");
+        double z = DoubleArgumentType.getDouble(context, "z");
+        if (!Double.isFinite(x) || !Double.isFinite(z)) {
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.wind_failed"));
+            return 0;
+        }
+        StormManager.setWind(level, x, z);
+        context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.wind_set", x, z), true);
+        return 1;
+    }
+
+    private static int removeStorm(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        String argument = StringArgumentType.getString(context, "id");
+        UUID id = parseId(context, argument);
+        if (id == null) {
+            return 0;
+        }
+        boolean removed = StormManager.remove(level, id);
+        context.getSource().sendSuccess(() -> Component.translatable(removed
+                ? "commands.localizedrain.storm.removed"
+                : "commands.localizedrain.storm.missing", argument), true);
+        return removed ? 1 : 0;
+    }
+
+    private static int removeAllStorms(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        int total = StormManager.removeWhere(level, snapshot -> true);
+        context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.removed_all", total), true);
+        return total;
     }
 
     private static CompletableFuture<Suggestions> suggestTypes(CommandContext<CommandSourceStack> context,

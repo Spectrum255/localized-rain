@@ -676,23 +676,17 @@ public final class WeatherData extends SavedData {
                 }
                 if (--this.rainTime <= 0) {
                     if (candidateMode) {
+                        // 从该群的天气池里抽一种；池里可以包含晴天
+                        WeatherBiomeFilter.Candidate chosen = candidates.get(random.nextInt(candidates.size()));
+                        this.type = chosen.id();
+                        this.raining = !chosen.clear();
+                        this.thundering = false;
+                        this.precipitating = this.raining && chosen.precipitation();
+                        this.thunderAllowed = this.raining && chosen.thunder();
+                        this.rainTime = this.raining
+                                ? range(random, Config.MIN_RAIN_TICKS.get(), Config.MAX_RAIN_TICKS.get())
+                                : range(random, Config.MIN_CLEAR_TICKS.get(), Config.MAX_CLEAR_TICKS.get());
                         if (this.raining) {
-                            // 天气阶段结束：回到晴天
-                            this.raining = false;
-                            this.thundering = false;
-                            this.precipitating = false;
-                            this.thunderAllowed = false;
-                            this.type = WeatherTypes.CLEAR_ID;
-                            this.rainTime = range(random, Config.MIN_CLEAR_TICKS.get(), Config.MAX_CLEAR_TICKS.get());
-                        } else {
-                            // 从候选集中随机抽取一种天气
-                            WeatherBiomeFilter.Candidate chosen = candidates.get(random.nextInt(candidates.size()));
-                            this.type = chosen.id();
-                            this.raining = true;
-                            this.precipitating = chosen.precipitation();
-                            this.thunderAllowed = chosen.thunder();
-                            this.thundering = false;
-                            this.rainTime = range(random, Config.MIN_RAIN_TICKS.get(), Config.MAX_RAIN_TICKS.get());
                             this.thunderTime = range(random, Config.MIN_THUNDER_DELAY_TICKS.get(),
                                     Config.MAX_THUNDER_DELAY_TICKS.get());
                         }

@@ -13,6 +13,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class LevelWeatherMixin {
     @Inject(method = "isRainingAt", at = @At("HEAD"), cancellable = true)
     private void localizedrain$filterRainAt(BlockPos pos, CallbackInfoReturnable<Boolean> callback) {
+        if (WeatherManager.vanillaMode()) {
+            return;
+        }
         // 服务端整体接管：用局部区域天气，但保留原版的见天/遮挡/降水类型判断
         if ((Object) this instanceof ServerLevel level) {
             callback.setReturnValue(WeatherManager.isRainingAt(level, pos));

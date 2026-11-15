@@ -1,12 +1,18 @@
 package com.spectrum255.localizedrain.api;
 
 import com.spectrum255.localizedrain.Localizedrain;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import net.minecraft.core.Holder;
+import net.minecraft.core.HolderSet;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.level.biome.Biome;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -36,6 +42,17 @@ public final class WeatherTypes {
             () -> new WeatherType("weather.localizedrain.rain", true, Biome.Precipitation.RAIN, false));
     public static final DeferredHolder<WeatherType, WeatherType> THUNDER = REGISTRY.register("thunder",
             () -> new WeatherType("weather.localizedrain.thunder", true, Biome.Precipitation.RAIN, true));
+
+    /**
+     * 天气类型标签：默认自然天气池。
+     *
+     * <p>本模组不内置任何标签文件；数据包可以在
+     * {@code data/<namespace>/tags/localizedrain/weather_type/natural.json} 里定义它。
+     * 标签不存在时回退到内置的 {@code clear}/{@code rain}/{@code thunder}，所以默认行为不变；
+     * 标签一旦存在就以标签内容为准（可以是空列表，表示默认不再自然变天）。</p>
+     */
+    public static final TagKey<WeatherType> NATURAL =
+            TagKey.create(REGISTRY_KEY, ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "natural"));
 
     /** 按 id 缓存解析结果；注册表在运行期不变，服务器启动/配置重载时清空。 */
     private static final Map<ResourceLocation, WeatherType> CACHE = new HashMap<>();
@@ -80,8 +97,45 @@ public final class WeatherTypes {
         return CLEAR_ID.equals(typeId) || RAIN_ID.equals(typeId) || THUNDER_ID.equals(typeId);
     }
 
+    /**
+     * 默认自然天气池：优先使用 {@link #NATURAL} 标签；标签不存在时回退到内置的晴/雨/雷。
+     * 标签存在但为空，表示默认不再自然变天。
+     */
+    public static List<ResourceLocation> naturalIds(ServerLevel level) {
+        Registry<WeatherType> registry = registry(level);
+        if (registry != null) {
+            Optional<HolderSet.Named<WeatherType>> tag = registry.getTag(NATURAL);
+            if (tag.isPresent()) {
+                return collect(tag.get());
+            }
+        }
+        return List.of(CLEAR_ID, RAIN_ID, THUNDER_ID);
+    }
+
+    /** 解析天气类型标签；标签未定义时返回空列表。 */
+    public static List<ResourceLocation> tagIds(ServerLevel level, ResourceLocation tagId) {
+        Registry<WeatherType> registry = registry(level);
+        if (registry == null) {
+            return List.of();
+        }
+        Optional<HolderSet.Named<WeatherType>> tag = registry.getTag(TagKey.create(REGISTRY_KEY, tagId));
+        return tag.map(WeatherTypes::collect).orElse(List.of());
+    }
+
     /** 清空解析缓存（服务器启动、配置重载、注册表变化时调用）。 */
     public static void invalidate() {
         CACHE.clear();
+    }
+
+    private static Registry<WeatherType> registry(ServerLevel level) {
+        return level.registryAccess().registry(REGISTRY_KEY).orElse(null);
+    }
+
+    private static List<ResourceLocation> collect(HolderSet.Named<WeatherType> tag) {
+        List<ResourceLocation> ids = new ArrayList<>();
+        for (Holder<WeatherType> holder : tag) {
+            holder.unwrapKey().map(ResourceKey::location).ifPresent(ids::add);
+        }
+        return List.copyOf(ids);
     }
 }

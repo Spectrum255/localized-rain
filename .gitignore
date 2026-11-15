@@ -41,3 +41,6 @@ repo/
 
 ### Local profiling artifacts (spark) ###
 docs/spark-*
+
+### Local agent scratch documents (trae) ###
+.trae/

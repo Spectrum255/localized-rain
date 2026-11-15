@@ -1,0 +1,18 @@
+{
+  "weight": 5,
+  "natural": true,
+  "speed_multiplier": 2.2,
+  "radius": [90, 150],
+  "vertical": "surface",
+  "stages": [
+    {
+      "type": "localizedrain:thunder",
+      "min_ticks": 1200,
+      "max_ticks": 2400,
+      "rain": [0.7, 0.9],
+      "thunder": [0.4, 0.7],
+      "radius_scale": [0.8, 1.0]
+    }
+  ],
+  "environment": { "stage_speed_from_moisture": false, "moisture_gain": 0.0, "moisture_decay": 0.004 }
+}

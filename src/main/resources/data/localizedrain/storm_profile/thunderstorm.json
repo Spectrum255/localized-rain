@@ -1,0 +1,36 @@
+{
+  "weight": 20,
+  "natural": true,
+  "speed_multiplier": 0.8,
+  "radius": [200, 350],
+  "vertical": "surface",
+  "stages": [
+    {
+      "type": "localizedrain:rain",
+      "min_ticks": 2000,
+      "max_ticks": 4000,
+      "rain": [0.5, 0.8],
+      "thunder": [0.0, 0.3],
+      "radius_scale": [0.9, 1.0]
+    },
+    {
+      "type": "localizedrain:thunder",
+      "min_ticks": 3000,
+      "max_ticks": 6000,
+      "rain": [0.8, 1.0],
+      "thunder": [0.6, 1.0],
+      "radius_scale": [1.0, 1.15],
+      "advance_when_moisture": 0.85
+    },
+    {
+      "type": "localizedrain:thunder",
+      "min_ticks": 2000,
+      "max_ticks": 4000,
+      "rain": [0.5, 0.8],
+      "thunder": [0.2, 0.6],
+      "radius_scale": [1.15, 1.0],
+      "die_when_moisture": 0.15
+    }
+  ],
+  "environment": { "stage_speed_from_moisture": true, "moisture_gain": 0.003, "moisture_decay": 0.001 }
+}
