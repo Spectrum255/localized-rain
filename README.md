@@ -351,7 +351,7 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 
 - `docs/idea.md`：设计目标
 - `docs/storm-system.md`：移动天气系统（内部实现参考：架构、数据模型、配置、命令、API、同步与已知限制）
-- `docs/release-1.0.0-preview.md`：1.0.0-preview 发布说明（移动天气系统、过滤规则、风暴一致性修复）
+- `docs/release-1.0.0-alpha.md`：1.0.0-alpha 发布说明（移动天气系统、过滤规则、风暴一致性修复）
 - `README.en.md`：README 的英文版
 
 ## 许可

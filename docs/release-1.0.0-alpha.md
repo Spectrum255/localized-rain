@@ -1,10 +1,10 @@
-# Localized Rain 1.0.0-preview（局部有雨）
+# Localized Rain 1.0.0-alpha（局部有雨）
 
-- 发布日期：2026-11-15（第二次预览构建）
+- 发布日期：2026-11-15（首个公开测试版）
 - 目标平台：Minecraft 1.21.1 / NeoForge 21.1.265+
 - 许可：MIT
-- 定位：在首个 `1.0.0-preview` 的基础上，加入**移动天气模式**（可漂移、可演化的风暴系统）并重做过滤器语义。
-  内部迭代曾用 `1.1.0-preview` / `1.2.0-preview` 标记，现已全部回落到 `1.0.0-preview`，功能集合以本文件为准。
+- 定位：基于 `1.0.0-preview` 的验证成果，加入**移动天气模式**（可漂移、可演化的风暴系统）并重做过滤器语义。
+  内部迭代曾用 `1.1.0-preview` / `1.2.0-preview` 标记，现已全部回落到 `1.0.0-alpha`，功能集合以本文件为准。
 
 > ⚠️ **客户端与服务端必须使用同一版本**（网络协议 `"6"`）。`optional()` 只保证版本不一致时不断开连接；
 > 登录时服务端会检查 `localizedrain` 通道是否注册，缺失时向玩家发提示、并在服务端日志记录警告
@@ -167,4 +167,4 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 .\gradlew.bat clean build --offline --console=plain
 ```
 
-产物：`build/libs/localizedrain-1.0.0-preview.jar`。
+产物：`build/libs/localizedrain-1.0.0-alpha.jar`。

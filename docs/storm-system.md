@@ -1,6 +1,6 @@
 # 移动天气系统（mobile 模式）
 
-> 内部实现参考。对外发布说明见 `docs/release-1.0.0-preview.md`。
+> 内部实现参考。对外发布说明见 `docs/release-1.0.0-alpha.md`。
 
 本文描述 `weatherMode = "mobile"` 下的风暴系统：数据模型、推进流程、客户端同步与已知限制。
 它和「3D 群系片」（`patches`）、「完全原版」（`vanilla`）互斥，同一时刻只有一套系统决定天气。
@@ -80,7 +80,7 @@ API：`WeatherApi.spawnStorm` / `removeStorms` / `storms` / `dominantStormAt` / 
 事件 `StormSpawnEvent`（可取消）、`StormRemoveEvent`（`MANUAL` / `FINISHED` / `FAR_AWAY` /
 `MISSING_PROFILE` / `CLEARED`）、`StormStageChangeEvent`。
 
-## 7. 移动模式修复内容（已并入 1.0.0-preview）
+## 7. 移动模式修复内容（已并入 1.0.0-alpha）
 
 1. 原版 `setWeatherParameters` / 手动天气不再无限堆积风暴：新增手动上限，并按「玩家附近同类型替换」去重。
 2. `/weather clear`、睡觉跳夜、原版清天气统一走 `removeWhere(..., CLEARED, true)`：发事件并立即广播，

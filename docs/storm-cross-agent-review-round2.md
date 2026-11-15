@@ -1,7 +1,7 @@
 # 移动风暴系统复核处理说明（跨 agent）
 
 - 日期：2026-11-15
-- 版本：`1.0.0-preview`（内部曾用 `1.1.0-preview` / `1.2.0-preview` 标记，已统一回落）
+- 版本：`1.0.0-alpha`（内部曾用 `1.1.0-preview` / `1.2.0-preview` 标记，已统一回落）
 - 来源：trae 第二轮 7 条 + 第三轮 8 条问题
 - 用途：逐条给出结论与处理，供后续 agent 接手；提交与发布状态见文末。
 
@@ -126,10 +126,10 @@
 
 ## 发布状态
 
-- 版本号：`1.0.0-preview`（`gradle.properties` 的 `mod_version`）。
+- 版本号：`1.0.0-alpha`（`gradle.properties` 的 `mod_version`）。
 - 提交内容：移动风暴系统全部源码、`src/main/resources/data/`、README/文档、lang 键。
 - `.trae/` 过程文档与 `docs/spark-*` 采样保留在本机，不进入仓库。
-- 发布说明：`docs/release-1.0.0-preview.md`（旧的 1.1.0/1.2.0 发布说明已合并删除）。
+- 发布说明：`docs/release-1.0.0-alpha.md`（旧的 1.1.0/1.2.0 发布说明已合并删除）。
 
 ## 仍需实机确认
 
