@@ -4,6 +4,7 @@ import com.spectrum255.localizedrain.Config;
 import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
+import com.spectrum255.localizedrain.api.WeatherMode;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import java.util.ArrayList;
@@ -22,6 +23,10 @@ final class StormSpawner {
     private StormSpawner() {}
 
     static void tick(ServerLevel level) {
+        // 双重保险：只有 MOBILE 模式才允许自然生成（StormManager.tick 已做入口检查）。
+        if (WeatherMode.current() != WeatherMode.MOBILE) {
+            return;
+        }
         if (!level.dimensionType().hasSkyLight() || level.dimensionType().hasCeiling()) {
             return;                     // 自然风暴只生成在有天光、无天花板的维度（下界/末地不会长风暴）
         }

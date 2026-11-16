@@ -7,6 +7,7 @@ import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormTags;
 import com.spectrum255.localizedrain.api.StormSnapshot;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
+import com.spectrum255.localizedrain.api.WeatherMode;
 import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.api.WindState;
@@ -261,6 +262,12 @@ public final class StormManager {
 
     /** 每 tick 由 WeatherManager 在 MOBILE 模式下调用（阶段 1 的 tickMobile 方法体）。 */
     public static void tick(ServerLevel level) {
+        // 防御：非 MOBILE 模式下不应推进风暴。若配置在运行期被改回 PATCHES，
+        // 这里提前返回，避免 StormSpawner 之外的其他入口在本模式下产生自然风暴。
+        // 已有风暴留在 StormData 中，切回 MOBILE 后会继续推进。
+        if (WeatherMode.current() != WeatherMode.MOBILE) {
+            return;
+        }
         StormData data = data(level);
         DOMINANT_CACHE.remove(level);       // 每 tick 重新计算天气覆盖，避免跨 tick 复用
         data.wind().tick(level);
@@ -623,7 +630,8 @@ public final class StormManager {
                 continue;
             }
             float intensity = Math.max(storm.effectiveRain(), storm.effectiveThunder());
-            if (intensity > bestIntensity) {
+            // 非降水自定义天气的强度恒为 0，但仍然是覆盖该位置的有效风暴。
+            if (best == null || intensity > bestIntensity) {
                 bestIntensity = intensity;
                 best = storm;
             }

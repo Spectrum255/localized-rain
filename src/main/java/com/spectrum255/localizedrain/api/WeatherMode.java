@@ -22,6 +22,29 @@ public enum WeatherMode implements StringRepresentable, TranslatableEnum {
         return this.name;
     }
 
+    /**
+     * 大小写不敏感的解析入口：接受小写 serialized name（{@code "mobile"}）与
+     * 大写常量名（{@code "MOBILE"}）。配置读写走 NeoForge 的 {@code EnumValue}，
+     * 正常情况下由 {@code EnumGetMethod.NAME_IGNORECASE} 处理；此方法用于防御性读取
+     * 以及未来从字符串配置迁移时复用。
+     */
+    public static WeatherMode parse(String input) {
+        if (input == null) {
+            return PATCHES;
+        }
+        for (WeatherMode mode : values()) {
+            if (mode.name.equals(input)) {
+                return mode;
+            }
+        }
+        for (WeatherMode mode : values()) {
+            if (mode.name().equalsIgnoreCase(input)) {
+                return mode;
+            }
+        }
+        return PATCHES;
+    }
+
     /** 配置界面循环按钮显示的文本；没有 {@code TranslatableEnum} 时 NeoForge 会显示枚举常量名。 */
     @Override
     public Component getTranslatedName() {
@@ -48,7 +71,10 @@ public enum WeatherMode implements StringRepresentable, TranslatableEnum {
     private static WeatherMode read() {
         try {
             WeatherMode mode = Config.WEATHER_MODE.get();
-            return mode == null ? PATCHES : mode;
+            if (mode != null) {
+                return mode;
+            }
+            return PATCHES;
         } catch (IllegalStateException ignored) {
             // 配置尚未加载：按默认值推进，避免服务器启动早期抛异常
             return PATCHES;
