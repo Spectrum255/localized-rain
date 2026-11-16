@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,8 +34,14 @@ public final class ConfigFiles {
     /** 需要按存档独立的 SERVER 配置文件：全局文件只作为新建存档的默认值。 */
     private static final String[] PER_WORLD_FILES = {"weather.toml", "filters.toml"};
     /** 已删除的配置键：旧文件里可能残留，留着会让用户误以为还能改（按文件名分组）。 */
-    private static final Map<String, Set<String>> REMOVED_KEYS = Map.of(
-            "weather.toml", Set.of("manualStormRadius"));
+    private static final Map<String, Set<String>> REMOVED_KEYS = removedKeys();
+
+    /** 用有序映射定义，保证遍历（以及清理日志）的顺序稳定、可预期。 */
+    private static Map<String, Set<String>> removedKeys() {
+        Map<String, Set<String>> keys = new LinkedHashMap<>();
+        keys.put("weather.toml", Set.of("manualStormRadius"));
+        return Collections.unmodifiableMap(keys);
+    }
 
     /**
      * 旧版单文件配置里的顶层键。迁移时按新文件拆分：
@@ -324,10 +331,22 @@ public final class ConfigFiles {
     private static void writeAtomically(Path file, String content) throws IOException {
         Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
         Files.writeString(temporary, content, StandardCharsets.UTF_8);
+        boolean moved = false;
         try {
             Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            moved = true;
         } catch (AtomicMoveNotSupportedException exception) {
             Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+            moved = true;
+        } finally {
+            if (!moved) {
+                // 移动失败时清掉半成品，避免残留 .tmp 被下次启动误读
+                try {
+                    Files.deleteIfExists(temporary);
+                } catch (IOException ignored) {
+                    // 清理失败不覆盖原始异常
+                }
+            }
         }
     }
 
