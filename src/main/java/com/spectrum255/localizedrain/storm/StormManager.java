@@ -14,6 +14,7 @@ import com.spectrum255.localizedrain.api.event.StormRemoveEvent;
 import com.spectrum255.localizedrain.api.event.StormSpawnEvent;
 import com.spectrum255.localizedrain.api.event.StormStageChangeEvent;
 import com.spectrum255.localizedrain.weather.WeatherLightning;
+import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -239,25 +240,7 @@ public final class StormManager {
         return removeWhere(level, snapshot -> true, StormRemoveEvent.Reason.CLEARED, true);
     }
 
-    /** 清除与给定位置/半径相交的风暴，返回移除数量；radius {@code <= 0} 表示只清除覆盖该点的风暴。 */
-    public static int clearAt(ServerLevel level, BlockPos pos, double radius) {
-        double px = pos.getX() + 0.5D;
-        double py = pos.getY() + 0.5D;
-        double pz = pos.getZ() + 0.5D;
-        double reach = Math.max(0.0D, radius);
-        return removeWhere(level, snapshot -> {
-            if (py < snapshot.minY() || py > snapshot.maxY()) {
-                return false;
-            }
-            double dx = snapshot.x() - px;
-            double dz = snapshot.z() - pz;
-            double limit = snapshot.radius() + reach;
-            return dx * dx + dz * dz <= limit * limit;
-        }, StormRemoveEvent.Reason.CLEARED, true);
-    }
-
-    /**
-     * 只按水平距离清除风暴，不检查 Y 区间。
+    /** 只按水平距离清除风暴，不检查 Y 区间。
      * 命令按区域清除时使用：玩家站在高空也能清掉脚下的地表风暴。
      */
     public static int clearAtColumn(ServerLevel level, BlockPos pos, double radius) {
@@ -453,8 +436,9 @@ public final class StormManager {
                 spec.lifetimeTicks() > 0 ? spec.lifetimeTicks() : StormObject.pickTicks(storm.seed, stage);
         storm.lifeTicksLeft = spec.lifetimeTicks();
         WeatherType resolvedType = WeatherTypes.resolve(level, effectiveType);
-        spec.rainIntensity().ifPresent(intensity -> storm.rainIntensity = intensity);
-        spec.thunderIntensity().ifPresent(intensity -> storm.thunderIntensity = intensity);
+        // 立刻用阶段强度初始化，否则生成后第一次 broadcast 的强度仍是 0
+        storm.rainIntensity = spec.rainIntensity().orElse(stage.rain().lerp(0.0F));
+        storm.thunderIntensity = spec.thunderIntensity().orElse(stage.thunder().lerp(0.0F));
         // typeOverride 只改类型：能力位存进风暴，阶段推进与强度覆盖时都会再次钳制
         storm.capabilityType = effectiveType;
         storm.applyCapabilities(resolvedType);
@@ -763,17 +747,34 @@ public final class StormManager {
         // 半径交给档案自己的区间（cave_rain 是 48–96）；0 表示「不覆盖」
         int radius = 0;
         int players = level.players().size();
+        if (players == 0) {
+            return;
+        }
         int spawned = 0;
+        int skipped = 0;
         for (ServerPlayer player : level.players()) {
+            // 与模组 /weather 的移动模式入口保持一致：强制天气群系里的玩家跳过
+            if (WeatherBiomeFilter.forcedTypeAt(level, player.blockPosition()) != null) {
+                skipped++;
+                continue;
+            }
             if (spawnManual(level, player.blockPosition(), typeId, match, radius,
                     duration <= 0 ? -1 : duration) != null) {
                 spawned++;
             }
         }
-        if (spawned < players) {
+        int candidates = players - skipped;
+        if (spawned < candidates) {
             // 手动上限截断：告诉玩家是「部分生效」，避免被当成命令失效
             Component message = Component.translatable(
-                    "commands.localizedrain.storm.partial_spawned", spawned, players);
+                    "commands.localizedrain.storm.partial_spawned", spawned, candidates);
+            for (ServerPlayer player : level.players()) {
+                player.sendSystemMessage(message);
+            }
+        }
+        if (skipped > 0) {
+            Component message = Component.translatable(
+                    "commands.localizedrain.storm.players_skipped", skipped);
             for (ServerPlayer player : level.players()) {
                 player.sendSystemMessage(message);
             }
@@ -794,8 +795,9 @@ public final class StormManager {
     private static StormSnapshot spawnManual(ServerLevel level, BlockPos pos, ResourceLocation typeId,
                                              ProfileMatch match, int radius, int durationTicks) {
         if (WeatherTypes.CLEAR_ID.equals(typeId)) {
-            // clear 的语义是「把覆盖该位置的风暴清掉」，而不是生成一个晴天风暴
-            removeWhere(level, snapshot -> snapshot.covers(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D));
+            // clear 的语义是「把覆盖该位置的风暴清掉」，而不是生成一个晴天风暴；
+            // 与命令一致按列判断，避免高空清除地表风暴失败
+            clearAtColumn(level, pos, 0.0D);
             return null;
         }
         int cap = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);

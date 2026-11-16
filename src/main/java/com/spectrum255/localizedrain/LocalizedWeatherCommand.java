@@ -309,6 +309,10 @@ public final class LocalizedWeatherCommand {
             return removed;
         }
         int players = level.players().size();
+        if (players == 0) {
+            source.sendSuccess(() -> Component.translatable("commands.localizedrain.storm.no_players"), false);
+            return 0;
+        }
         int spawned = 0;
         int skipped = 0;
         for (ServerPlayer player : level.players()) {

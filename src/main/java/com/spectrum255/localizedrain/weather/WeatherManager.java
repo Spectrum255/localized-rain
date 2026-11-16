@@ -753,9 +753,6 @@ public final class WeatherManager {
                 // 按尝试次数扣预算：即使生成失败（上限/无档案）也不会继续扫后续片
                 budget--;
                 StormManager.spawnManual(level, center, typeId, 0, duration);
-                if (budget <= 0) {
-                    break;
-                }
             }
             return;
         }

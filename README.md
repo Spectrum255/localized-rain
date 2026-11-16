@@ -170,8 +170,9 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
   原版的积雪与炼药锅集水已通过 `tickPrecipitation` 内的重定向按区域恢复。
 - **Xaero's Minimap**：装了本模组与 Xaero 小地图时，天气信息行会自动替换为局地天气，
   切换片/风暴时立即更新；桥接为纯反射实现，不打包 Xaero 的类，未装 Xaero 时自动跳过。
-- **附属模组 / 移动天气**：移动模式按片 key 的 `WeatherApi.setWeather(level, patches, ...)` 不生效，
-  请使用坐标入口或 `spawnStorm`。
+- **附属模组 / 移动天气**：移动模式下 `WeatherApi.setWeather(level, patches, ...)` 会把每个片中心映射为一个手动风暴
+  （`CLEAR_ID` 则映射为按列清除）；单次调用最多处理 `maxManualStormsPerDimension` 个片，避免对全维度片逐个扫描，
+  超过部分会静默截断。需要精确范围时请使用坐标入口或 `spawnStorm`。
 
 ## 已知限制
 

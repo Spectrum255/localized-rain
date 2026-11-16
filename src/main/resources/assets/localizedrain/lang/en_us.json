@@ -130,6 +130,8 @@
   "commands.localizedrain.storm.no_skylight_blocked": "This dimension has no skylight or has a ceiling: SURFACE rain/snow is invisible, and cave thunderstorms are not supported. Use the band subcommand for cave rain",
   "commands.localizedrain.storm.no_profile": "No storm profile is available for that weather type; check whether a matching storm_profile is provided by a data pack",
   "commands.localizedrain.storm.thunder_unavailable": "This dimension has no skylight or has a ceiling: cave storms never strike, so thunder weather cannot be spawned here",
-  "commands.localizedrain.storm.partial_spawned": "Spawned %s of %s manual storms: the manual storm limit was reached, so some players did not receive weather",
+  "commands.localizedrain.storm.partial_spawned": "(only %s of %s manual storms were spawned: the manual storm limit was reached)",
+  "commands.localizedrain.storm.players_skipped": "(%s player(s) skipped: their biome is pinned by a forced weather rule)",
+  "commands.localizedrain.storm.no_players": "No players in this dimension; nothing was spawned",
   "message.localizedrain.protocol_mismatch": "Your client is missing a matching Localized Rain version (or uses an incompatible protocol); weather and storm sync are unavailable"
 }

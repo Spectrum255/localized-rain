@@ -130,6 +130,8 @@
   "commands.localizedrain.storm.no_skylight_blocked": "该维度没有天光或有天花板：SURFACE 雨雪不可见，且本模组不提供洞穴雷暴；可用 band 子命令生成洞穴降雨",
   "commands.localizedrain.storm.no_profile": "没有可用于该天气类型的风暴档案；请检查数据包是否提供了匹配的 storm_profile",
   "commands.localizedrain.storm.thunder_unavailable": "该维度没有天光或有天花板：洞穴风暴永远不会落雷，不能在这里生成雷暴类型",
-  "commands.localizedrain.storm.partial_spawned": "已生成 %s / %s 个手动风暴：达到手动风暴上限，部分玩家没有获得天气",
+  "commands.localizedrain.storm.partial_spawned": "其中 %s / %s 个成功生成：达到手动风暴上限，部分玩家没有获得天气",
+  "commands.localizedrain.storm.players_skipped": "（%s 位玩家位于强制天气群系，已跳过）",
+  "commands.localizedrain.storm.no_players": "当前维度没有玩家，未生成任何风暴",
   "message.localizedrain.protocol_mismatch": "你的客户端未安装同版本的 Localized Rain（或网络协议不匹配），天气与风暴同步将不可用"
 }

@@ -170,8 +170,10 @@ Main options (with defaults):
   Third-party logic that depends on dimension-level checks will not see local weather; call `WeatherApi`'s position-based queries for local weather.
   Vanilla snow accumulation and cauldron filling have been restored per area through a redirect inside `tickPrecipitation`.
 - **Xaero's Minimap**: with this mod and Xaero's Minimap installed, the weather info line automatically switches to local weather and updates immediately when you cross patches/storms; the bridge is pure reflection, bundles no Xaero classes, and is skipped when Xaero is absent.
-- **Addon mods / mobile weather**: in mobile mode, `WeatherApi.setWeather(level, patches, ...)` by patch key does not take effect;
-  use the position-based entry points or `spawnStorm` instead.
+- **Addon mods / mobile weather**: in mobile mode `WeatherApi.setWeather(level, patches, ...)` maps each patch centre
+  to one manual storm (`CLEAR_ID` maps to a column clear). A single call processes at most
+  `maxManualStormsPerDimension` patches to avoid scanning every patch in the dimension; anything beyond that is
+  truncated silently. Use the position-based entry points or `spawnStorm` for exact ranges.
 
 ## Known limitations
 
