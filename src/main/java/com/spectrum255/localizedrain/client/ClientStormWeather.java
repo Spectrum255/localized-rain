@@ -11,6 +11,8 @@ public final class ClientStormWeather {
     private static final float LEVEL_STEP = 0.01F;
     private static float currentRain;
     private static float currentThunder;
+    /** 上一 tick 是否由风暴系统接管：从接管变为不接管时，把残留雨量写回 0。 */
+    private static boolean wasActive;
 
     private ClientStormWeather() {}
 
@@ -24,8 +26,16 @@ public final class ClientStormWeather {
             // 从未收到快照，或服务端已不在移动模式：交还逐玩家雨量包驱动，保持原版/片模式渲染
             currentRain = 0.0F;
             currentThunder = 0.0F;
+            if (wasActive) {
+                // 服务端停止风暴接管（切回 patches/vanilla）：把客户端残留的雨雷量清零，否则原版渲染会一直下雨
+                wasActive = false;
+                level.setRainLevel(0.0F);
+                level.setThunderLevel(0.0F);
+                level.getLevelData().setRaining(false);
+            }
             return;
         }
+        wasActive = true;
         double falloffRatio = ClientStormCache.falloffRatio();
         boolean isolated = level.getBiome(player.blockPosition()).is(
                 com.spectrum255.localizedrain.api.StormTags.STORM_ISOLATED);

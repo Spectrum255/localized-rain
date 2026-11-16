@@ -84,6 +84,9 @@ public final class WeatherManager {
         // 模式在运行期变化（配置重载）时立刻重推风暴快照：客户端据此停止/开始接管雨量
         if (mode != lastMode) {
             lastMode = mode;
+            // 移动模式期间 send() 不运行，LAST_SENT 停在进入移动模式前的旧值；不清掉的话，
+            // 切回 patches 后目标值只要与旧缓存相同就不会发包，客户端会一直保留风暴雨量。
+            LAST_SENT.clear();
             StormManager.refreshAll(level.getServer());
         }
         switch (mode) {

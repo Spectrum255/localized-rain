@@ -19,6 +19,18 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
         SURFACE("surface"), BAND("band"), COLUMN("column");
 
         public static final Codec<VerticalMode> CODEC = StringRepresentable.fromEnum(VerticalMode::values);
+        /** 容错版：未知值回退 {@link #SURFACE}，避免一个笔误中止整个世界加载。 */
+        public static final Codec<VerticalMode> TOLERANT_CODEC = Codec.STRING.comapFlatMap(
+                value -> {
+                    for (VerticalMode mode : values()) {
+                        if (mode.name.equalsIgnoreCase(value)) {
+                            return DataResult.success(mode);
+                        }
+                    }
+                    Localizedrain.LOGGER.warn("[localizedrain] unknown storm vertical mode '{}', using surface", value);
+                    return DataResult.success(SURFACE);
+                },
+                VerticalMode::getSerializedName);
         private final String name;
 
         VerticalMode(String name) {
@@ -34,9 +46,15 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
     /** 二元区间，JSON 里写作 [min, max]。 */
     public record Range(double min, double max) {
         public static final Codec<Range> CODEC = Codec.list(Codec.DOUBLE)
-                .comapFlatMap(list -> list.size() == 2
-                                ? DataResult.success(new Range(list.get(0), list.get(1)))
-                                : DataResult.error(() -> "expected [min, max], got " + list.size() + " values"),
+                .comapFlatMap(list -> {
+                            if (list.size() == 2) {
+                                return DataResult.success(new Range(list.get(0), list.get(1)));
+                            }
+                            double first = list.isEmpty() ? 0.0D : list.get(0);
+                            Localizedrain.LOGGER.warn("[localizedrain] expected [min, max], got {} value(s); using [{}, {}]",
+                                    list.size(), first, first);
+                            return DataResult.success(new Range(first, first));
+                        },
                         range -> List.of(range.min(), range.max()));
 
         public float lerp(float delta) {
@@ -47,8 +65,20 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
     /** 单个阶段。阈值字段缺省表示该档案不启用对应阈值。 */
     public record Stage(ResourceLocation type, int minTicks, int maxTicks, Range rain, Range thunder,
                         Range radiusScale, Optional<Float> advanceWhenMoisture, Optional<Float> dieWhenMoisture) {
+        private static final ResourceLocation DEFAULT_TYPE = ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "rain");
+        /** 容错版资源位置：非法 id 回退内置降雨类型并给出 warn 级解析消息。 */
+        public static final Codec<ResourceLocation> TOLERANT_TYPE_CODEC = Codec.STRING.comapFlatMap(
+                value -> {
+                    ResourceLocation id = ResourceLocation.tryParse(value);
+                    if (id != null) {
+                        return DataResult.success(id);
+                    }
+                    Localizedrain.LOGGER.warn("[localizedrain] invalid weather type '{}', using localizedrain:rain", value);
+                    return DataResult.success(DEFAULT_TYPE);
+                },
+                ResourceLocation::toString);
         public static final Codec<Stage> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-                ResourceLocation.CODEC.fieldOf("type").forGetter(Stage::type),
+                TOLERANT_TYPE_CODEC.fieldOf("type").forGetter(Stage::type),
                 Codec.INT.optionalFieldOf("min_ticks", 4000).forGetter(Stage::minTicks),
                 Codec.INT.optionalFieldOf("max_ticks", 8000).forGetter(Stage::maxTicks),
                 Range.CODEC.optionalFieldOf("rain", new Range(0.4D, 0.8D)).forGetter(Stage::rain),
@@ -73,7 +103,7 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
             Codec.BOOL.optionalFieldOf("natural", true).forGetter(StormProfile::natural),
             Codec.DOUBLE.optionalFieldOf("speed_multiplier", 1.0D).forGetter(StormProfile::speedMultiplier),
             Range.CODEC.optionalFieldOf("radius", new Range(150.0D, 300.0D)).forGetter(StormProfile::radius),
-            VerticalMode.CODEC.optionalFieldOf("vertical", VerticalMode.SURFACE).forGetter(StormProfile::vertical),
+            VerticalMode.TOLERANT_CODEC.optionalFieldOf("vertical", VerticalMode.SURFACE).forGetter(StormProfile::vertical),
             Stage.CODEC.listOf().fieldOf("stages").forGetter(StormProfile::stages),
             Environment.CODEC.optionalFieldOf("environment", new Environment(true, 0.002D, 0.001D))
                     .forGetter(StormProfile::environment)
@@ -87,11 +117,15 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
     public static final Codec<StormProfile> CODEC = RECORD_CODEC.flatXmap(StormProfile::sanitize, DataResult::success);
 
     private static DataResult<StormProfile> sanitize(StormProfile profile) {
-        if (profile.stages().isEmpty()) {
-            return DataResult.error(() -> "storm profile must contain at least one stage");
+        // 数据包注册表 codec error 会中止整个世界加载（不是跳过单个档案）：空阶段时补一个默认降雨阶段。
+        boolean changed = profile.stages().isEmpty();
+        List<Stage> stages = new ArrayList<>(Math.max(1, profile.stages().size()));
+        if (changed) {
+            Localizedrain.LOGGER.warn("[localizedrain] storm profile has no stages; added a default rain stage");
+            stages.add(new Stage(ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "rain"),
+                    4000, 8000, new Range(0.4D, 0.7D), new Range(0.0D, 0.0D), new Range(1.0D, 1.0D),
+                    Optional.empty(), Optional.empty()));
         }
-        boolean changed = false;
-        List<Stage> stages = new ArrayList<>(profile.stages().size());
         for (Stage stage : profile.stages()) {
             int minTicks = Math.max(1, stage.minTicks());
             int maxTicks = Math.max(minTicks, stage.maxTicks());
@@ -110,8 +144,11 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
                 stages.add(stage);
             }
         }
-        double minRadius = Math.max(1.0D, profile.radius().min());
-        double maxRadius = Math.max(minRadius, profile.radius().max());
+        // 半径是随机生成区间，顺序无意义：统一整理为升序（旧实现会把递减区间压成 [min, min]）
+        double lowRadius = Math.min(profile.radius().min(), profile.radius().max());
+        double highRadius = Math.max(profile.radius().min(), profile.radius().max());
+        double minRadius = Math.max(1.0D, lowRadius);
+        double maxRadius = Math.max(minRadius, highRadius);
         int weight = Math.max(1, profile.weight());
         double speed = Math.max(0.01D, profile.speedMultiplier());
         StormProfile result = new StormProfile(weight, profile.natural(), speed,

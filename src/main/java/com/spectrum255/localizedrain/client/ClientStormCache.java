@@ -26,8 +26,8 @@ public final class ClientStormCache {
         private final boolean allowsThunder;
         private final double minY;
         private final double maxY;
-        private final float rain;
-        private final float thunder;
+        private float rain;
+        private float thunder;
         private final boolean manual;
         private final boolean dying;
         private int dyingTicksLeft;
@@ -36,6 +36,9 @@ public final class ClientStormCache {
         private double radius;
         private double velocityX;
         private double velocityZ;
+        /** 最近一次权威快照的位置；外推偏离过远时吸附回来。 */
+        private double anchorX;
+        private double anchorZ;
 
         private Storm(StormSyncPayload.StormEntry entry) {
             this.id = entry.id();
@@ -54,6 +57,8 @@ public final class ClientStormCache {
             this.radius = entry.radius();
             this.velocityX = entry.velocityX();
             this.velocityZ = entry.velocityZ();
+            this.anchorX = entry.x();
+            this.anchorZ = entry.z();
         }
 
         public double x() { return this.x; }
@@ -91,6 +96,10 @@ public final class ClientStormCache {
             if (existing != null) {
                 storm.x = existing.x + (entry.x() - existing.x) * 0.5D;
                 storm.z = existing.z + (entry.z() - existing.z) * 0.5D;
+                // 半径与强度同样做半程插值：硬替换会让 40 tick 一次的快照产生可见跳变
+                storm.radius = existing.radius + (entry.radius() - existing.radius) * 0.5D;
+                storm.rain = existing.rain + (entry.rain() - existing.rain) * 0.5F;
+                storm.thunder = existing.thunder + (entry.thunder() - existing.thunder) * 0.5F;
             }
             next.put(storm.id, storm);
         }
@@ -100,13 +109,19 @@ public final class ClientStormCache {
 
     /** 每 tick 按速度外推一次，等价于服务端的真实推进。 */
     public static void tick() {
-        STORMS.values().forEach(storm -> {
+        for (Storm storm : STORMS.values()) {
             storm.x += storm.velocityX;
             storm.z += storm.velocityZ;
+            // 快照停发时不要无限外推：偏离最近权威位置太远就吸附回去
+            double limit = Math.max(512.0D, storm.radius * 4.0D);
+            if (Math.hypot(storm.x - storm.anchorX, storm.z - storm.anchorZ) > limit) {
+                storm.x = storm.anchorX;
+                storm.z = storm.anchorZ;
+            }
             if (storm.dying && storm.dyingTicksLeft > 0) {
                 storm.dyingTicksLeft--;
             }
-        });
+        }
     }
 
     public static List<Storm> storms() {

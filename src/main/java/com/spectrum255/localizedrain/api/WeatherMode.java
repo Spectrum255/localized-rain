@@ -29,7 +29,7 @@ public enum WeatherMode implements StringRepresentable, TranslatableEnum {
     }
 
     /** 配置加载/重载与服务器启动时清空，避免热路径反复读配置。 */
-    private static WeatherMode cached;
+    private static volatile WeatherMode cached;
 
     /** 当前模式；配置尚未加载或取值非法时回退 {@link #PATCHES}。 */
     public static WeatherMode current() {

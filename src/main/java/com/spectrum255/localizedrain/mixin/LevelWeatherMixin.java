@@ -13,12 +13,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class LevelWeatherMixin {
     @Inject(method = "isRainingAt", at = @At("HEAD"), cancellable = true)
     private void localizedrain$filterRainAt(BlockPos pos, CallbackInfoReturnable<Boolean> callback) {
+        // 先用 instanceof 排除客户端：客户端的 Level 不应读服务端天气配置（配置未加载时也会走异常路径）
+        if (!((Object) this instanceof ServerLevel level)) {
+            return;
+        }
         if (WeatherManager.vanillaMode()) {
             return;
         }
         // 服务端整体接管：用局部区域天气，但保留原版的见天/遮挡/降水类型判断
-        if ((Object) this instanceof ServerLevel level) {
-            callback.setReturnValue(WeatherManager.isRainingAt(level, pos));
-        }
+        callback.setReturnValue(WeatherManager.isRainingAt(level, pos));
     }
 }

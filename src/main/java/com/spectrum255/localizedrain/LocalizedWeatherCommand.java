@@ -447,9 +447,9 @@ public final class LocalizedWeatherCommand {
                     "commands.localizedrain.storm.thunder_unavailable"));
             return 0;
         }
-        double actualRadius = Double.isNaN(radius)
-                ? WindField.intConfig(Config.VANILLA_COMMAND_STORM_RADIUS, 512)
-                : radius;
+        // 不指定半径时交给档案自身的 radius 区间（例如 cave_rain 的 48–96）；
+        // 旧的 VANILLA_COMMAND_STORM_RADIUS 只作为 /weather storm global 的默认值保留。
+        double actualRadius = Double.isNaN(radius) ? 0.0D : radius;
         int cap = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);
         int existing = StormManager.manualStormCount(level);
         int players = level.players().size();
@@ -461,8 +461,10 @@ public final class LocalizedWeatherCommand {
         int spawned = 0;
         for (ServerPlayer player : level.players()) {
             StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, Vec3.atCenterOf(player.blockPosition()))
-                    .radius(actualRadius)
                     .manual(true);
+            if (actualRadius > 0.0D) {
+                builder.radius(actualRadius);
+            }
             if (duration > 0) {
                 builder.lifetime(duration);
             }

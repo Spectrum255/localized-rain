@@ -114,7 +114,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `weather.toml` | 全局：`config/localizedrain/weather.toml`（新存档默认值）；存档：`<存档>/serverconfig/localizedrain/weather.toml` | 天气模式、天气模拟区间、移动风暴参数；每个存档独立 |
 | `filters.toml` | 全局：`config/localizedrain/filters.toml`（新存档默认值）；存档：`<存档>/serverconfig/localizedrain/filters.toml` | 天气过滤器（群系=天气），三项列表直接位于文件根级；每个存档独立 |
 
-每个存档首次启动时，模组会把全局 `config/localizedrain/weather.toml` 与 `filters.toml` 自动复制为该存档的 `<存档>/serverconfig/localizedrain/` 下的独立副本（已存在则不覆盖）；之后的修改互不影响。改动已存在的存档请编辑该存档下的文件。旧版 `config/localizedrain-common.toml` 首次启动会复制为 `config/localizedrain/common.toml`（旧文件保留作备份），其中天气键需迁移到 `weather.toml`。
+每个存档首次启动时，模组会把全局 `config/localizedrain/weather.toml` 与 `filters.toml` 自动复制为该存档的 `<存档>/serverconfig/localizedrain/` 下的独立副本（已存在则不覆盖）；之后的修改互不影响。改动已存在的存档请编辑该存档下的文件。旧版 `config/localizedrain-common.toml` 会在启动时自动拆分迁移：天气/风暴键 → `weather.toml`，三个过滤器列表 → `filters.toml`，调试键 → `common.toml`（目标文件已存在则跳过；旧文件保留作备份）。已有存档中仍为默认 `PATCHES` 的 `weatherMode` 会跟随旧文件迁移一次（每份旧文件只提示一次差异），每个存档自己选过的模式不会被覆盖。
 
 以下为主要配置项（默认值）。
 

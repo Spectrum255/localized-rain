@@ -46,17 +46,8 @@ public final class Localizedrain {
         } catch (IOException exception) {
             LOGGER.warn("[localizedrain] could not create config directory {}", configDir, exception);
         }
-        // 旧版单文件配置：迁移到新目录（保留旧文件作为备份，不删除）
-        Path legacyCommon = FMLPaths.CONFIGDIR.get().resolve("localizedrain-common.toml");
-        Path commonFile = configDir.resolve("common.toml");
-        if (Files.notExists(commonFile) && Files.exists(legacyCommon)) {
-            try {
-                Files.copy(legacyCommon, commonFile);
-                LOGGER.info("[localizedrain] migrated legacy config {} to {}", legacyCommon, commonFile);
-            } catch (IOException exception) {
-                LOGGER.warn("[localizedrain] could not migrate legacy config {}", legacyCommon, exception);
-            }
-        }
+        // 旧版单文件配置：按新文件拆分迁移（保留旧文件作为备份，不删除）
+        ConfigFiles.migrateLegacyConfigs();
         // common.toml 是所有存档共用的调试开关；weather.toml / filters.toml 是 SERVER 配置，
         // 每个存档在 <world>/serverconfig/localizedrain/ 下独立，
         // config/localizedrain/ 里的同名文件则作为新建存档的默认值来源。
@@ -84,6 +75,7 @@ public final class Localizedrain {
             StormProfiles.logLoaded(event.getServer());
             // HEAD 注入时全局 weather.toml 可能还没生成（首次启动）；这里补一次，供下次启动使用
             ConfigFiles.seedWorldConfigs(event.getServer());
+            LOGGER.info("[localizedrain] per-world configs: {}", ConfigFiles.worldConfigStatus(event.getServer()));
         });
         // 服务器停止/换存档：清空风暴相关的静态缓存（LAST_HUD、LAST_SYNC、维度缓存等）
         NeoForge.EVENT_BUS.addListener((ServerStoppedEvent event) -> StormManager.resetCaches());
