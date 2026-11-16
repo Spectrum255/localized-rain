@@ -171,6 +171,15 @@ public final class Config {
                             "0 disables natural spawning, 1 spawns on every attempt.")
                     .defineInRange("naturalStormSpawnChance", 0.035D, 0.0D, 1.0D);
 
+    /** 自然风暴的生成位置策略：在玩家附近，或在任意已加载区块随机生成。 */
+    public static final ModConfigSpec.ConfigValue<String> STORM_SPAWN_PLACEMENT =
+            WEATHER_BUILDER.comment("Where natural storms spawn.",
+                            "near_player     = within the configured distance of a random player (respects the per-player cap)",
+                            "anywhere_loaded = at a random loaded chunk (ignores the per-player cap)")
+                    .define("stormSpawnPlacement", "near_player",
+                            value -> value instanceof String placement
+                                    && ("near_player".equals(placement) || "anywhere_loaded".equals(placement)));
+
     public static final ModConfigSpec.IntValue WIND_CHANGE_INTERVAL_TICKS =
             WEATHER_BUILDER.comment("How often (in ticks) the dimension wind direction is re-rolled.")
                     .defineInRange("windChangeIntervalTicks", 1200, 20, 240000);

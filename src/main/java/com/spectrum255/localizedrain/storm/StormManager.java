@@ -369,8 +369,8 @@ public final class StormManager {
                 WeatherType type = profile == null ? WeatherTypes.CLEAR.get()
                         : WeatherTypes.byId(level, storm.weatherType(profile));
                 hud = new StormSyncData.Hud(
-                        type.hasPrecipitation() && storm.effectiveRain() > 0.05F,
-                        type.allowsThunder() && storm.effectiveThunder() > 0.05F,
+                        type.hasPrecipitation() && storm.effectiveRain() > 0.2F,
+                        type.allowsThunder() && storm.effectiveThunder() > 0.9F,
                         type.displayKey());
             }
             if (!hud.equals(LAST_HUD.get(player.getUUID()))) {

@@ -7,6 +7,7 @@ import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
 import com.spectrum255.localizedrain.api.WeatherMode;
 import com.spectrum255.localizedrain.api.WeatherTypes;
+import com.spectrum255.localizedrain.weather.LoadedChunks;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +17,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 
@@ -54,11 +56,6 @@ final class StormSpawner {
             return;
         }
         RandomSource random = level.getRandom();
-        ServerPlayer player = players.get(random.nextInt(players.size()));
-        if (ownedBy(level, player) >= WindField.intConfig(Config.MAX_STORMS_PER_PLAYER, 2)) {
-            debugSpawn("per-player natural storm cap reached");
-            return;
-        }
 
         // 生成率：每次检查只按概率真正尝试生成。默认 0.035 约等于每 4.8 分钟一个（旧实测约 1/14 分钟，约 3 倍）。
         double spawnChance = WindField.doubleConfig(Config.NATURAL_STORM_SPAWN_CHANCE, 0.035D);
@@ -67,34 +64,72 @@ final class StormSpawner {
             return;
         }
 
-        int configuredMin = WindField.intConfig(Config.STORM_SPAWN_MIN_DISTANCE, 300);
-        int configuredMax = Math.max(configuredMin, WindField.intConfig(Config.STORM_SPAWN_MAX_DISTANCE, 700));
-        // 只在已加载半径内选点：300–700 格通常超过模拟距离（12 区块 = 192 格），probe 未加载会被静默丢弃。
-        double loadedRadius = level.getServer().getPlayerList().getSimulationDistance() * 16.0D - 32.0D;
-        if (loadedRadius < 48.0D) {
-            debugSpawn("simulation distance is too small for a spawn probe");
-            return;
-        }
-        double effectiveMax = Math.min(configuredMax, loadedRadius);
-        double effectiveMin = Math.min(configuredMin, effectiveMax * 0.6D);
-        double distance = effectiveMin + random.nextDouble() * Math.max(1.0D, effectiveMax - effectiveMin);
-
-        // 上风向生成：把风场方向反过来
-        WindField wind = data.wind();
-        double speed = Math.hypot(wind.velocityX(), wind.velocityZ());
-        double directionX;
-        double directionZ;
-        if (speed > 1.0E-4D) {
-            directionX = wind.velocityX() / speed;
-            directionZ = wind.velocityZ() / speed;
+        boolean anywhere = "anywhere_loaded".equals(
+                WindField.stringConfig(Config.STORM_SPAWN_PLACEMENT, "near_player"));
+        double x;
+        double z;
+        BlockPos probe;
+        if (anywhere) {
+            // 任意已加载区块：不受「每个玩家附近」上限约束，风暴可能出现在探索过的任何地方
+            long[] loaded = LoadedChunks.snapshot(level);
+            if (loaded.length == 0) {
+                debugSpawn("no loaded chunks to place a storm in");
+                return;
+            }
+            long chunkPos = loaded[random.nextInt(loaded.length)];
+            int chunkX = ChunkPos.getX(chunkPos);
+            int chunkZ = ChunkPos.getZ(chunkPos);
+            if (!level.getChunkSource().hasChunk(chunkX, chunkZ)) {
+                debugSpawn("chosen loaded chunk vanished before spawning");
+                return;
+            }
+            x = (chunkX << 4) + 8.0D + (random.nextDouble() * 8.0D - 4.0D);
+            z = (chunkZ << 4) + 8.0D + (random.nextDouble() * 8.0D - 4.0D);
+            probe = new BlockPos((int) Math.floor(x), level.getMinBuildHeight(), (int) Math.floor(z));
         } else {
-            double angle = random.nextDouble() * Math.PI * 2.0D;
-            directionX = Math.cos(angle);
-            directionZ = Math.sin(angle);
+            // 按随机顺序遍历玩家：当前玩家达到上限时换下一个，而不是整次放弃
+            int perPlayerCap = WindField.intConfig(Config.MAX_STORMS_PER_PLAYER, 2);
+            int start = random.nextInt(players.size());
+            ServerPlayer player = null;
+            for (int offset = 0; offset < players.size() && player == null; offset++) {
+                ServerPlayer candidate = players.get((start + offset) % players.size());
+                if (ownedBy(level, candidate) < perPlayerCap) {
+                    player = candidate;
+                }
+            }
+            if (player == null) {
+                debugSpawn("per-player natural storm cap reached");
+                return;
+            }
+            int configuredMin = WindField.intConfig(Config.STORM_SPAWN_MIN_DISTANCE, 300);
+            int configuredMax = Math.max(configuredMin, WindField.intConfig(Config.STORM_SPAWN_MAX_DISTANCE, 700));
+            // 只在已加载半径内选点：300–700 格通常超过模拟距离（12 区块 = 192 格），probe 未加载会被静默丢弃。
+            double loadedRadius = level.getServer().getPlayerList().getSimulationDistance() * 16.0D - 32.0D;
+            if (loadedRadius < 48.0D) {
+                debugSpawn("simulation distance is too small for a spawn probe");
+                return;
+            }
+            double effectiveMax = Math.min(configuredMax, loadedRadius);
+            double effectiveMin = Math.min(configuredMin, effectiveMax * 0.6D);
+            double distance = effectiveMin + random.nextDouble() * Math.max(1.0D, effectiveMax - effectiveMin);
+
+            // 上风向生成：把风场方向反过来
+            WindField wind = data.wind();
+            double speed = Math.hypot(wind.velocityX(), wind.velocityZ());
+            double directionX;
+            double directionZ;
+            if (speed > 1.0E-4D) {
+                directionX = wind.velocityX() / speed;
+                directionZ = wind.velocityZ() / speed;
+            } else {
+                double angle = random.nextDouble() * Math.PI * 2.0D;
+                directionX = Math.cos(angle);
+                directionZ = Math.sin(angle);
+            }
+            x = player.getX() - directionX * distance;
+            z = player.getZ() - directionZ * distance;
+            probe = BlockPos.containing(x, player.getY(), z);
         }
-        double x = player.getX() - directionX * distance;
-        double z = player.getZ() - directionZ * distance;
-        BlockPos probe = BlockPos.containing(x, player.getY(), z);
         if (!level.isLoaded(probe)) {
             debugSpawn("spawn probe chunk is not loaded");
             return;
