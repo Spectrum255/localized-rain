@@ -94,7 +94,9 @@ public final class WeatherApi {
      */
     public static boolean setWeatherAt(ServerLevel level, BlockPos pos, ResourceLocation typeId, int duration) {
         if (WeatherMode.current() == WeatherMode.MOBILE) {
-            int radius = WindField.intConfig(Config.MANUAL_STORM_RADIUS, 128);
+            // 无天光维度不传半径：让档案自己的区间生效（cave_rain 是 48–96）
+            int radius = StormManager.allowsManualStorms(level)
+                    ? WindField.intConfig(Config.MANUAL_STORM_RADIUS, 128) : 0;
             if (WeatherTypes.CLEAR_ID.equals(typeId)) {
                 // clear 不是「生成晴天风暴」，而是移除覆盖该位置的风暴：成功与否都算处理过
                 StormManager.spawnManual(level, pos, typeId, radius, duration);

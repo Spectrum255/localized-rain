@@ -16,6 +16,7 @@ import com.spectrum255.localizedrain.api.event.StormStageChangeEvent;
 import com.spectrum255.localizedrain.weather.WeatherLightning;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -394,7 +395,7 @@ public final class StormManager {
         StormProfile.Stage stage = profile.stage(stageIndex);
         ResourceLocation effectiveType = spec.typeOverride().orElse(stage.type());
         if (!allowsManualStorms(level) && vertical != StormProfile.VerticalMode.SURFACE
-                && WeatherTypes.byId(level, effectiveType).allowsThunder()) {
+                && (WeatherTypes.byId(level, effectiveType).allowsThunder() || profile.hasThunderStage(level))) {
             // 无天光 / 有天花板的维度里洞穴风暴永不落雷：直接拒绝雷暴类型（命令与 API 一致）
             return null;
         }
@@ -732,7 +733,7 @@ public final class StormManager {
     /** 在指定位置生成单阶段手动风暴（setWeatherAt / 原版 /weather 共用）。 */
     public static StormSnapshot spawnManual(ServerLevel level, BlockPos pos, ResourceLocation typeId,
                                             int radius, int durationTicks) {
-        ResourceLocation profileId = findProfileId(level, typeId, false);
+        ResourceLocation profileId = findProfileId(level, typeId, !allowsManualStorms(level));
         if (profileId == null) {
             return null;
         }
@@ -776,17 +777,38 @@ public final class StormManager {
         return snapshot;
     }
 
-    /** 按天气类型找第一个匹配档案；{@code nonSurface} 用于无天光维度，只接受 BAND/COLUMN 档案。 */
+    /**
+     * 按天气类型挑一个匹配档案：
+     * <ul>
+     *   <li>有天空的维度：只接受 {@code natural = true} 且竖直模式为 SURFACE 的档案
+     *       （否则 {@code /weather rain} 可能选中 cave_rain，得到一个 48–96 格的地下带）；</li>
+     *   <li>无天光 / 有天花板的维度：只接受 BAND/COLUMN 档案；</li>
+     *   <li>候选按 id 排序后取 weight 最大者，避免注册表顺序导致结果不可复现。</li>
+     * </ul>
+     */
     private static ResourceLocation findProfileId(ServerLevel level, ResourceLocation typeId, boolean nonSurface) {
-        for (ResourceLocation id : StormProfiles.ids(level)) {
+        List<ResourceLocation> ids = new ArrayList<>(StormProfiles.ids(level));
+        ids.sort(Comparator.comparing(ResourceLocation::toString));
+        ResourceLocation best = null;
+        int bestWeight = -1;
+        for (ResourceLocation id : ids) {
             StormProfile profile = profile(level, id);
-            if (profile != null
-                    && profile.stage(0).type().equals(typeId)
-                    && (!nonSurface || profile.vertical() != StormProfile.VerticalMode.SURFACE)) {
-                return id;
+            if (profile == null || !profile.stage(0).type().equals(typeId)) {
+                continue;
+            }
+            if (nonSurface) {
+                if (profile.vertical() == StormProfile.VerticalMode.SURFACE) {
+                    continue;
+                }
+            } else if (profile.vertical() != StormProfile.VerticalMode.SURFACE || !profile.natural()) {
+                continue;
+            }
+            if (profile.weight() > bestWeight) {
+                bestWeight = profile.weight();
+                best = id;
             }
         }
-        return null;
+        return best;
     }
 
     /**

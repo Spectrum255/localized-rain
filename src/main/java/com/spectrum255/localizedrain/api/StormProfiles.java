@@ -85,5 +85,17 @@ public final class StormProfiles {
         }
         Localizedrain.LOGGER.info("[localizedrain] loaded {} storm profiles: {}",
                 registry.size(), registry.keySet());
+        // 未注册的天气类型在运行时会静默回退成晴天：启动时集中提示一次，便于定位数据包笔误
+        for (Holder.Reference<StormProfile> holder : registry.holders().toList()) {
+            int index = 0;
+            for (StormProfile.Stage stage : holder.value().stages()) {
+                if (WeatherTypes.resolve(server.overworld(), stage.type()) == null) {
+                    Localizedrain.LOGGER.warn(
+                            "[localizedrain] storm profile {} stage {} uses unregistered weather type {}; it will behave as clear",
+                            holder.key().location(), index, stage.type());
+                }
+                index++;
+            }
+        }
     }
 }

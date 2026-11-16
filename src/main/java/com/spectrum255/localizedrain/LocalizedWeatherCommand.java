@@ -342,7 +342,7 @@ public final class LocalizedWeatherCommand {
             return null;
         }
         if (!StormManager.allowsManualStorms(level)
-                && WeatherTypes.byId(level, profile.stage(0).type()).allowsThunder()) {
+                && profile.hasThunderStage(level)) {
             // 非 SURFACE 的雷暴在无天光/天花板维度永不落雷，直接拒绝
             context.getSource().sendFailure(Component.translatable(
                     "commands.localizedrain.storm.thunder_unavailable"));
@@ -441,14 +441,13 @@ public final class LocalizedWeatherCommand {
             return 0;
         }
         if (!StormManager.allowsManualStorms(level)
-                && WeatherTypes.byId(level, profile.stage(0).type()).allowsThunder()) {
+                && profile.hasThunderStage(level)) {
             // 非 SURFACE 的雷暴在无天光/天花板维度永不落雷，直接拒绝
             context.getSource().sendFailure(Component.translatable(
                     "commands.localizedrain.storm.thunder_unavailable"));
             return 0;
         }
-        // 不指定半径时交给档案自身的 radius 区间（例如 cave_rain 的 48–96）；
-        // 旧的 VANILLA_COMMAND_STORM_RADIUS 只作为 /weather storm global 的默认值保留。
+        // 不指定半径时交给档案自身的 radius 区间（例如 cave_rain 的 48–96）
         double actualRadius = Double.isNaN(radius) ? 0.0D : radius;
         int cap = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);
         int existing = StormManager.manualStormCount(level);
@@ -459,6 +458,7 @@ public final class LocalizedWeatherCommand {
             return 0;
         }
         int spawned = 0;
+        double firstRadius = -1.0D;
         for (ServerPlayer player : level.players()) {
             StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, Vec3.atCenterOf(player.blockPosition()))
                     .manual(true);
@@ -468,8 +468,12 @@ public final class LocalizedWeatherCommand {
             if (duration > 0) {
                 builder.lifetime(duration);
             }
-            if (StormManager.spawn(level, builder.build()) != null) {
+            StormSnapshot snapshot = StormManager.spawn(level, builder.build());
+            if (snapshot != null) {
                 spawned++;
+                if (firstRadius < 0.0D) {
+                    firstRadius = snapshot.radius();
+                }
             }
         }
         if (spawned == 0) {
@@ -478,8 +482,9 @@ public final class LocalizedWeatherCommand {
             return 0;
         }
         int count = spawned;
+        int shownRadius = firstRadius < 0.0D ? 0 : (int) Math.round(firstRadius);
         context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.global_spawned",
-                count, profileId.toString(), (int) actualRadius), true);
+                count, profileId.toString(), shownRadius), true);
         return count;
     }
 

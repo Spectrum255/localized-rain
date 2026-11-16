@@ -114,7 +114,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `weather.toml` | 全局：`config/localizedrain/weather.toml`（新存档默认值）；存档：`<存档>/serverconfig/localizedrain/weather.toml` | 天气模式、天气模拟区间、移动风暴参数；每个存档独立 |
 | `filters.toml` | 全局：`config/localizedrain/filters.toml`（新存档默认值）；存档：`<存档>/serverconfig/localizedrain/filters.toml` | 天气过滤器（群系=天气），三项列表直接位于文件根级；每个存档独立 |
 
-每个存档首次启动时，模组会把全局 `config/localizedrain/weather.toml` 与 `filters.toml` 自动复制为该存档的 `<存档>/serverconfig/localizedrain/` 下的独立副本（已存在则不覆盖）；之后的修改互不影响。改动已存在的存档请编辑该存档下的文件。旧版 `config/localizedrain-common.toml` 会在启动时自动拆分迁移：天气/风暴键 → `weather.toml`，三个过滤器列表 → `filters.toml`，调试键 → `common.toml`（目标文件已存在则跳过；旧文件保留作备份）。已有存档中仍为默认 `PATCHES` 的 `weatherMode` 会跟随旧文件迁移一次（每份旧文件只提示一次差异），每个存档自己选过的模式不会被覆盖。
+每个存档首次启动时，模组会把全局 `config/localizedrain/weather.toml` 与 `filters.toml` 复制为该存档的 `<存档>/serverconfig/localizedrain/` 下的独立副本（已存在则不覆盖）；之后的修改互不影响。全新安装的第一个存档可能还没有全局文件，此时本次启动使用内置/全局默认，并从下一次启动起使用存档副本。改动已存在的存档请编辑该存档下的文件。旧版 `config/localizedrain-common.toml` 会在启动时自动拆分迁移：天气/风暴键 → `weather.toml`，三个过滤器列表 → `filters.toml`，调试键 → `common.toml`（目标文件已存在则跳过；旧文件保留作备份）。已有存档中仍为默认 `PATCHES` 的 `weatherMode` 会跟随旧文件迁移一次（迁移后在存档目录留下 `.weatherMode-migrated` 标记，之后手动改回 `PATCHES` 不会被再次覆盖），每个存档自己选过的模式不会被覆盖。
 
 以下为主要配置项（默认值）。
 
@@ -159,7 +159,6 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `despawnDistance`                       | `1000`          | 自然风暴远离玩家的消亡距离                         |
 | `despawnGraceTicks`                     | `600`           | 远离多久后开始淡出                             |
 | `manualStormRadius`                     | `128`           | 手动风暴默认半径                              |
-| `vanillaCommandStormRadius`             | `512`           | `/weather storm global` 的默认半径         |
 | `stormSyncIntervalTicks`                | `40`            | 风暴快照校正间隔                              |
 | `falloffRatio`                          | `0.3`           | 风暴边缘的衰减宽度比例                           |
 | `lightningMultiplier`                   | `1.0`           | 落雷概率倍率，`0` 关闭                         |

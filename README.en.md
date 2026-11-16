@@ -115,7 +115,7 @@ Config files are split into global and per-save layers:
 | `weather.toml` | global defaults at `config/localizedrain/weather.toml`; each save uses `<save>/serverconfig/localizedrain/weather.toml` | weather mode, simulation timings, moving-storm settings; per save |
 | `filters.toml` | global defaults at `config/localizedrain/filters.toml`; each save uses `<save>/serverconfig/localizedrain/filters.toml` | weather filters (biome=weather), three root-level lists; per save |
 
-On first launch of each save the mod copies the global `config/localizedrain/weather.toml` and `filters.toml` to that save's `<save>/serverconfig/localizedrain/` (existing files are never overwritten); edits stay independent from then on. Edit the per-save files to change an existing world. The legacy `config/localizedrain-common.toml` is split automatically on launch: weather/storm keys go to `weather.toml`, the three filter lists go to `filters.toml`, and debug keys go to `common.toml` (existing targets are skipped; the old file is kept as a backup). In existing saves a `weatherMode` that is still the default `PATCHES` is migrated once from the legacy file (each legacy file warns about other differences only once); a mode you picked in a given save is never overwritten.
+On first launch of each save the mod copies the global `config/localizedrain/weather.toml` and `filters.toml` to that save's `<save>/serverconfig/localizedrain/` (existing files are never overwritten); edits stay independent from then on. A brand-new installation's first save may not have the global files yet: that session uses the built-in/global defaults and starts using the per-save copies from the next launch. Edit the per-save files to change an existing world. The legacy `config/localizedrain-common.toml` is split automatically on launch: weather/storm keys go to `weather.toml`, the three filter lists go to `filters.toml`, and debug keys go to `common.toml` (existing targets are skipped; the old file is kept as a backup). In existing saves a `weatherMode` that is still the default `PATCHES` is migrated once from the legacy file (a `.weatherMode-migrated` marker is written to the save directory, so setting it back to `PATCHES` later is respected); a mode you picked in a given save is never overwritten.
 
 Main options (with defaults):
 
@@ -160,7 +160,6 @@ Main options (with defaults):
 | `despawnDistance`                       | `1000`          | Distance at which natural storms fade out          |
 | `despawnGraceTicks`                     | `600`           | How long a storm stays far away before fading      |
 | `manualStormRadius`                     | `128`           | Default radius for manual storms                   |
-| `vanillaCommandStormRadius`             | `512`           | Default radius for `/weather storm global`         |
 | `stormSyncIntervalTicks`                | `40`            | Storm snapshot correction interval                 |
 | `falloffRatio`                          | `0.3`           | Width ratio of the fading edge around a storm      |
 | `lightningMultiplier`                   | `1.0`           | Lightning probability multiplier; `0` disables     |

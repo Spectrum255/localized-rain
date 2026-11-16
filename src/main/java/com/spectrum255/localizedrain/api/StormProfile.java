@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.StringRepresentable;
 
 /** 数据驱动风暴档案：形状、阶段序列与环境调制参数。JSON 路径 data/<ns>/storm_profile/<id>.json。 */
@@ -104,7 +105,7 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
             Codec.DOUBLE.optionalFieldOf("speed_multiplier", 1.0D).forGetter(StormProfile::speedMultiplier),
             Range.CODEC.optionalFieldOf("radius", new Range(150.0D, 300.0D)).forGetter(StormProfile::radius),
             VerticalMode.TOLERANT_CODEC.optionalFieldOf("vertical", VerticalMode.SURFACE).forGetter(StormProfile::vertical),
-            Stage.CODEC.listOf().fieldOf("stages").forGetter(StormProfile::stages),
+            Stage.CODEC.listOf().optionalFieldOf("stages", List.of()).forGetter(StormProfile::stages),
             Environment.CODEC.optionalFieldOf("environment", new Environment(true, 0.002D, 0.001D))
                     .forGetter(StormProfile::environment)
     ).apply(instance, StormProfile::new));
@@ -112,16 +113,15 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
     /**
      * 读档时把越界数值修正到可用范围，而不是报错：
      * 数据包加载器对 codec error 会中止整个世界加载（不是跳过单个档案）。区间允许 min &gt; max，
-     * 表示该阶段内数值从 min 递减到 max（强度渐变、半径收缩）。只有「没有任何阶段」才报错。
+     * 表示该阶段内数值从 min 递减到 max（强度渐变、半径收缩）。没有任何阶段时补一个默认降雨阶段。
      */
     public static final Codec<StormProfile> CODEC = RECORD_CODEC.flatXmap(StormProfile::sanitize, DataResult::success);
 
     private static DataResult<StormProfile> sanitize(StormProfile profile) {
         // 数据包注册表 codec error 会中止整个世界加载（不是跳过单个档案）：空阶段时补一个默认降雨阶段。
-        boolean changed = profile.stages().isEmpty();
+        boolean emptyStages = profile.stages().isEmpty();
         List<Stage> stages = new ArrayList<>(Math.max(1, profile.stages().size()));
-        if (changed) {
-            Localizedrain.LOGGER.warn("[localizedrain] storm profile has no stages; added a default rain stage");
+        if (emptyStages) {
             stages.add(new Stage(ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "rain"),
                     4000, 8000, new Range(0.4D, 0.7D), new Range(0.0D, 0.0D), new Range(1.0D, 1.0D),
                     Optional.empty(), Optional.empty()));
@@ -132,17 +132,9 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
             Range rain = clamp(stage.rain(), 0.0D, 1.0D);
             Range thunder = clamp(stage.thunder(), 0.0D, 1.0D);
             Range scale = clamp(stage.radiusScale(), 0.0D, 4.0D);
-            Optional<Float> advance = stage.advanceWhenMoisture().map(value -> clamp01(value));
-            Optional<Float> die = stage.dieWhenMoisture().map(value -> clamp01(value));
-            if (minTicks != stage.minTicks() || maxTicks != stage.maxTicks()
-                    || !rain.equals(stage.rain()) || !thunder.equals(stage.thunder())
-                    || !scale.equals(stage.radiusScale())
-                    || !advance.equals(stage.advanceWhenMoisture()) || !die.equals(stage.dieWhenMoisture())) {
-                changed = true;
-                stages.add(new Stage(stage.type(), minTicks, maxTicks, rain, thunder, scale, advance, die));
-            } else {
-                stages.add(stage);
-            }
+            Optional<Float> advance = stage.advanceWhenMoisture().map(StormProfile::clamp01);
+            Optional<Float> die = stage.dieWhenMoisture().map(StormProfile::clamp01);
+            stages.add(new Stage(stage.type(), minTicks, maxTicks, rain, thunder, scale, advance, die));
         }
         // 半径是随机生成区间，顺序无意义：统一整理为升序（旧实现会把递减区间压成 [min, min]）
         double lowRadius = Math.min(profile.radius().min(), profile.radius().max());
@@ -154,11 +146,25 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
         StormProfile result = new StormProfile(weight, profile.natural(), speed,
                 new Range(minRadius, maxRadius), profile.vertical(), List.copyOf(stages), profile.environment());
         if (!result.equals(profile)) {
-            Localizedrain.LOGGER.warn(
-                    "[localizedrain] storm profile values were clamped to a valid range; check its JSON (stages={}, radius=[{}, {}])",
-                    stages.size(), minRadius, maxRadius);
+            if (emptyStages) {
+                Localizedrain.LOGGER.warn("[localizedrain] storm profile has no stages; added a default rain stage");
+            } else {
+                Localizedrain.LOGGER.warn(
+                        "[localizedrain] storm profile values were clamped to a valid range; check its JSON (stages={}, radius=[{}, {}])",
+                        stages.size(), minRadius, maxRadius);
+            }
         }
         return DataResult.success(result);
+    }
+
+    /** 是否有任一阶段的天气类型允许落雷；无天光维度据此拒绝雷暴档案（不只检查 stage 0）。 */
+    public boolean hasThunderStage(ServerLevel level) {
+        for (Stage stage : this.stages) {
+            if (WeatherTypes.byId(level, stage.type()).allowsThunder()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 两个端点各自夹到 [low, high]，保留顺序（min &gt; max 表示递减）。 */

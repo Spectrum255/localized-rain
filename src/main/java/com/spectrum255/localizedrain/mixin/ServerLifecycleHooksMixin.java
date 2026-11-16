@@ -23,6 +23,6 @@ public abstract class ServerLifecycleHooksMixin {
     @Inject(method = "handleServerAboutToStart", at = @At("HEAD"))
     private static void localizedrain$seedPerWorldConfigs(MinecraftServer server, CallbackInfo callback) {
         Localizedrain.LOGGER.info("[localizedrain] preparing per-world configs before server config load");
-        ConfigFiles.seedWorldConfigs(server);
+        ConfigFiles.seedWorldConfigs(server, true);
     }
 }

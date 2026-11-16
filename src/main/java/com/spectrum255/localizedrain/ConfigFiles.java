@@ -44,7 +44,7 @@ public final class ConfigFiles {
             "spawnIntervalTicks", "spawnMinDistance", "spawnMaxDistance",
             "windChangeIntervalTicks", "windMinSpeed", "windMaxSpeed",
             "despawnDistance", "despawnGraceTicks", "manualStormRadius",
-            "vanillaCommandStormRadius", "stormSyncIntervalTicks", "falloffRatio", "lightningMultiplier");
+            "stormSyncIntervalTicks", "falloffRatio", "lightningMultiplier");
     private static final List<String> FILTER_KEYS = List.of(
             "weatherBiomeWhitelist", "weatherBiomeBlacklist", "weatherBiomeOverrides");
     private static final List<String> COMMON_KEYS = List.of(
@@ -90,10 +90,10 @@ public final class ConfigFiles {
         } else {
             // 目标文件已存在（例如新版本首次启动时已生成默认值）：旧值不会自动覆盖，至少要把差异说清楚，
             // 避免「旧配置里的 weatherMode=mobile 被静默丢回 patches」。同一份旧文件只提示一次。
-            if (legacyWarningDue(legacy, "global")) {
+            if (legacyWarningDue(legacy, configDir, "global")) {
                 warnLegacyDifferences(configDir.resolve("weather.toml"), WEATHER_KEYS, values);
                 warnLegacyDifferences(configDir.resolve("filters.toml"), FILTER_KEYS, values);
-                markLegacyWarning(legacy, "global");
+                markLegacyWarning(legacy, configDir, "global");
             }
         }
     }
@@ -122,19 +122,19 @@ public final class ConfigFiles {
     }
 
     /** 旧文件内容指纹（mtime + size）：同一份旧文件只告警一次，避免每次启动重复刷 WARN。 */
-    private static boolean legacyWarningDue(Path legacy, String scope) {
+    private static boolean legacyWarningDue(Path legacy, Path markerDir, String scope) {
         try {
             String stamp = legacyStamp(legacy);
-            Path marker = warningMarker(legacy, scope);
+            Path marker = warningMarker(markerDir, scope);
             return Files.notExists(marker) || !stamp.equals(Files.readString(marker, StandardCharsets.UTF_8).trim());
         } catch (IOException exception) {
             return true;
         }
     }
 
-    private static void markLegacyWarning(Path legacy, String scope) {
+    private static void markLegacyWarning(Path legacy, Path markerDir, String scope) {
         try {
-            Path marker = warningMarker(legacy, scope);
+            Path marker = warningMarker(markerDir, scope);
             Files.createDirectories(marker.getParent());
             Files.writeString(marker, legacyStamp(legacy), StandardCharsets.UTF_8);
         } catch (IOException ignored) {
@@ -142,8 +142,8 @@ public final class ConfigFiles {
         }
     }
 
-    private static Path warningMarker(Path legacy, String scope) {
-        return legacy.getParent().resolve(MOD_CONFIG_DIR).resolve(".legacy-warned-" + scope);
+    private static Path warningMarker(Path markerDir, String scope) {
+        return markerDir.resolve(".legacy-warned-" + scope);
     }
 
     private static String legacyStamp(Path legacy) throws IOException {
@@ -161,6 +161,12 @@ public final class ConfigFiles {
         if (Files.notExists(legacy)) {
             return 0;
         }
+        Path directory = server.getWorldPath(new LevelResource("serverconfig")).resolve(MOD_CONFIG_DIR);
+        Path marker = directory.resolve(".weatherMode-migrated");
+        if (Files.exists(marker)) {
+            // 每个存档只迁移一次：管理员把某个存档改回 PATCHES 后，下次启动不会被旧文件再覆盖
+            return 0;
+        }
         Map<String, String> legacyValues;
         try {
             legacyValues = readTopLevelValues(legacy);
@@ -171,8 +177,7 @@ public final class ConfigFiles {
         if (legacyMode == null) {
             return 0;
         }
-        Path weather = server.getWorldPath(new LevelResource("serverconfig"))
-                .resolve(MOD_CONFIG_DIR).resolve("weather.toml");
+        Path weather = directory.resolve("weather.toml");
         if (Files.notExists(weather)) {
             return 0;
         }
@@ -185,14 +190,14 @@ public final class ConfigFiles {
                     continue;
                 }
                 String current = trimmed.substring(equals + 1).trim();
-                if (normalized(current).equals(normalized(legacyMode))) {
-                    return 0; // 已是旧值
-                }
-                if (!normalized(current).equals("PATCHES")) {
-                    return 0; // 用户在该存档里另选过模式
+                if (normalized(current).equals(normalized(legacyMode))
+                        || !normalized(current).equals("PATCHES")) {
+                    markWeatherModeMigrated(marker, legacyMode);
+                    return 0; // 已是旧值，或用户在该存档里另选过模式
                 }
                 lines.set(index, "weatherMode = " + legacyMode);
                 Files.write(weather, lines, StandardCharsets.UTF_8);
+                markWeatherModeMigrated(marker, legacyMode);
                 Localizedrain.LOGGER.info("[localizedrain] migrated per-world weatherMode {} -> {} in {}",
                         current, legacyMode, weather);
                 return 1;
@@ -201,6 +206,15 @@ public final class ConfigFiles {
             Localizedrain.LOGGER.warn("[localizedrain] could not migrate per-world weatherMode in {}", weather, exception);
         }
         return 0;
+    }
+
+    private static void markWeatherModeMigrated(Path marker, String mode) {
+        try {
+            Files.createDirectories(marker.getParent());
+            Files.writeString(marker, mode, StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+            // 标记失败只影响去重，不影响启动
+        }
     }
 
     private static String normalized(String value) {
@@ -218,7 +232,7 @@ public final class ConfigFiles {
      * 为当前存档准备独立的 weather.toml / filters.toml。返回新建的文件数。
      * 失败只记警告，不影响启动（全局文件仍可作为后备）。
      */
-    public static int seedWorldConfigs(MinecraftServer server) {
+    public static int seedWorldConfigs(MinecraftServer server, boolean beforeConfigLoad) {
         int created = 0;
         for (String fileName : PER_WORLD_FILES) {
             if (seedFile(server, fileName)) {
@@ -229,19 +243,20 @@ public final class ConfigFiles {
             Localizedrain.LOGGER.info("[localizedrain] seeded {} per-world config file(s): {}",
                     created, worldConfigStatus(server));
         }
+        Path directory = server.getWorldPath(new LevelResource("serverconfig")).resolve(MOD_CONFIG_DIR);
         int migrated = migrateWorldWeatherMode(server);
         if (migrated > 0) {
-            Localizedrain.LOGGER.info("[localizedrain] per-world configs migrated from legacy: {}", worldConfigStatus(server));
+            Localizedrain.LOGGER.info("[localizedrain] migrated per-world weatherMode from legacy; {}: {}",
+                    beforeConfigLoad ? "applies to this session" : "applies next start", worldConfigStatus(server));
         }
-        // 已有存档的副本不会因全局文件更新而变化：把与旧文件的差异提示一次（每份旧文件只提示一次）。
+        // 已有存档的副本不会因全局文件更新而变化：把与旧文件的差异提示一次（每份旧文件、每个存档只提示一次）。
         Path legacy = FMLPaths.CONFIGDIR.get().resolve(LEGACY_FILE);
-        if (Files.exists(legacy) && legacyWarningDue(legacy, "world")) {
+        if (Files.exists(legacy) && legacyWarningDue(legacy, directory, "world")) {
             try {
                 Map<String, String> legacyValues = readTopLevelValues(legacy);
-                Path directory = server.getWorldPath(new LevelResource("serverconfig")).resolve(MOD_CONFIG_DIR);
                 warnLegacyDifferences(directory.resolve("weather.toml"), WEATHER_KEYS, legacyValues);
                 warnLegacyDifferences(directory.resolve("filters.toml"), FILTER_KEYS, legacyValues);
-                markLegacyWarning(legacy, "world");
+                markLegacyWarning(legacy, directory, "world");
             } catch (IOException ignored) {
                 // 诊断失败不影响启动
             }

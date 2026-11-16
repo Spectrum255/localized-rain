@@ -179,11 +179,6 @@ public final class Config {
             WEATHER_BUILDER.comment("Radius used when a manual storm is created from a single position (setWeatherAt).")
                     .defineInRange("manualStormRadius", 128, 16, 2048);
 
-    public static final ModConfigSpec.IntValue VANILLA_COMMAND_STORM_RADIUS =
-            WEATHER_BUILDER.comment("Default radius for /weather storm global when no radius argument is given.",
-                            "Vanilla /weather rain|thunder no longer uses this; profiles define their own radius range.")
-                    .defineInRange("vanillaCommandStormRadius", 512, 64, 4096);
-
     public static final ModConfigSpec.IntValue STORM_SYNC_INTERVAL_TICKS =
             WEATHER_BUILDER.comment("How often (in ticks) the full storm list is re-sent to clients as a correction.")
                     .defineInRange("stormSyncIntervalTicks", 40, 5, 1200);

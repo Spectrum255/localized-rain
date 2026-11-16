@@ -74,7 +74,7 @@ public final class Localizedrain {
             LOGGER.info("[localizedrain] weather mode = {}", WeatherMode.current());
             StormProfiles.logLoaded(event.getServer());
             // HEAD 注入时全局 weather.toml 可能还没生成（首次启动）；这里补一次，供下次启动使用
-            ConfigFiles.seedWorldConfigs(event.getServer());
+            ConfigFiles.seedWorldConfigs(event.getServer(), false);
             LOGGER.info("[localizedrain] per-world configs: {}", ConfigFiles.worldConfigStatus(event.getServer()));
         });
         // 服务器停止/换存档：清空风暴相关的静态缓存（LAST_HUD、LAST_SYNC、维度缓存等）
