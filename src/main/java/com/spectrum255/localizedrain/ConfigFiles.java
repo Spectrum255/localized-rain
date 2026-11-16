@@ -2,11 +2,15 @@ package com.spectrum255.localizedrain;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.fml.loading.FMLPaths;
@@ -28,8 +32,9 @@ public final class ConfigFiles {
     private static final String LEGACY_FILE = "localizedrain-common.toml";
     /** 需要按存档独立的 SERVER 配置文件：全局文件只作为新建存档的默认值。 */
     private static final String[] PER_WORLD_FILES = {"weather.toml", "filters.toml"};
-    /** 已删除的配置键：旧 weather.toml 里可能残留，留着会让用户误以为还能改。 */
-    private static final String REMOVED_WEATHER_KEY = "manualStormRadius";
+    /** 已删除的配置键：旧文件里可能残留，留着会让用户误以为还能改（按文件名分组）。 */
+    private static final Map<String, Set<String>> REMOVED_KEYS = Map.of(
+            "weather.toml", Set.of("manualStormRadius"));
 
     /**
      * 旧版单文件配置里的顶层键。迁移时按新文件拆分：
@@ -106,7 +111,7 @@ public final class ConfigFiles {
         }
         try {
             Map<String, String> current = readTopLevelValues(target);
-            List<String> differences = new java.util.ArrayList<>();
+            List<String> differences = new ArrayList<>();
             for (String key : keys) {
                 String oldValue = legacy.get(key);
                 String newValue = current.get(key);
@@ -270,43 +275,58 @@ public final class ConfigFiles {
     }
 
     /**
-     * 从全局与当前存档的 {@code weather.toml} 中删除已废弃的键。
+     * 按 {@link #REMOVED_KEYS} 从全局与当前存档的配置文件中删除已废弃的键。
      * NeoForge 会忽略未知键，但保留会让用户以为修改它仍有效；返回删除的行数。
      */
     private static int stripRemovedKeys(MinecraftServer server) {
-        int removed = stripRemovedKeys(FMLPaths.CONFIGDIR.get().resolve(MOD_CONFIG_DIR).resolve("weather.toml"));
-        Path worldWeather = server.getWorldPath(new LevelResource("serverconfig"))
-                .resolve(MOD_CONFIG_DIR).resolve("weather.toml");
-        removed += stripRemovedKeys(worldWeather);
+        Path globalDirectory = FMLPaths.CONFIGDIR.get().resolve(MOD_CONFIG_DIR);
+        Path worldDirectory = server.getWorldPath(new LevelResource("serverconfig")).resolve(MOD_CONFIG_DIR);
+        int removed = 0;
+        for (Map.Entry<String, Set<String>> entry : REMOVED_KEYS.entrySet()) {
+            removed += stripRemovedKeys(globalDirectory.resolve(entry.getKey()), entry.getValue());
+            removed += stripRemovedKeys(worldDirectory.resolve(entry.getKey()), entry.getValue());
+        }
         return removed;
     }
 
-    private static int stripRemovedKeys(Path file) {
-        if (Files.notExists(file)) {
+    private static int stripRemovedKeys(Path file, Set<String> removedKeys) {
+        if (removedKeys.isEmpty() || Files.notExists(file)) {
             return 0;
         }
         try {
             List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-            List<String> kept = new java.util.ArrayList<>(lines.size());
+            List<String> kept = new ArrayList<>(lines.size());
             int removed = 0;
             for (String line : lines) {
                 String trimmed = line.trim();
                 int equals = trimmed.indexOf('=');
                 String key = equals > 0 ? trimmed.substring(0, equals).trim() : "";
-                if (REMOVED_WEATHER_KEY.equals(key)) {
+                if (removedKeys.contains(key)) {
                     removed++;
                 } else {
                     kept.add(line);
                 }
             }
-            if (removed > 0) {
-                Files.write(file, kept, StandardCharsets.UTF_8);
-                Localizedrain.LOGGER.info("[localizedrain] removed deprecated config key '{}' from {}", REMOVED_WEATHER_KEY, file);
+            if (removed == 0) {
+                return 0;
             }
+            writeAtomically(file, String.join("\n", kept) + "\n");
+            Localizedrain.LOGGER.info("[localizedrain] removed {} deprecated config key(s) from {}", removed, file);
             return removed;
         } catch (IOException exception) {
             Localizedrain.LOGGER.warn("[localizedrain] could not clean deprecated keys in {}", file, exception);
             return 0;
+        }
+    }
+
+    /** 固定 LF 换行写回，并通过同目录临时文件原子替换，避免截断窗口与整文件换行符变化。 */
+    private static void writeAtomically(Path file, String content) throws IOException {
+        Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.writeString(temporary, content, StandardCharsets.UTF_8);
+        try {
+            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException exception) {
+            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
