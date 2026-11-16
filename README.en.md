@@ -14,7 +14,7 @@ Vanilla Minecraft weather is always triggered at random and applies to the entir
 
 ## Three weather modes
 
-`weatherMode` picks one of three modes. The default is `patches`. Switch it at runtime with `/weather mode <patches|mobile|vanilla>` (takes effect within about a second), or edit the save's `weather.toml`; both are hot-reloaded without restarting the game.
+`weatherMode` picks one of three modes. Newly created worlds default to `mobile` (moving storms). Switch it at runtime with `/weather mode <patches|mobile|vanilla>` (takes effect within about a second), or edit the save's `weather.toml`; both are hot-reloaded without restarting the game.
 
 | Mode      | Description                                                                                                             |
 | --------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -130,7 +130,7 @@ Main options (with defaults):
 
 | Key                              | Default   | Description                                              |
 | -------------------------------- | --------- | -------------------------------------------------------- |
-| `weatherMode`                    | `patches` | `patches` / `mobile` / `vanilla`; hot-switchable at runtime (about a second, or use `/weather mode`) |
+| `weatherMode`                    | `mobile`  | `patches` / `mobile` / `vanilla`; new worlds default to `mobile`; hot-switchable at runtime (about a second, or use `/weather mode`) |
 | `weatherSimulationIntervalTicks` | `20`      | Advance interval for loaded biome patches; larger is cheaper |
 | `scan3dSubstates`                | `true`    | Whether to scan 3D substates such as caves and floating islands |
 | `stateRetentionDays`             | `7`       | Days to keep patch states; `0` disables time-based cleanup |
@@ -140,6 +140,7 @@ Main options (with defaults):
 | `debugLogging`                   | `false`   | Emit patch scan / merge debug logging                      |
 | `logWeatherChanges`              | `false`   | Log biome patch weather changes with position and type    |
 | `logStormSpawns`                 | `true`    | Log detailed storm spawn parameters                       |
+| `logStormSpawnsToChat`           | `true`    | Report storm spawns in chat (center coordinates and type) |
 
 ### Weather pacing (ticks)
 
@@ -206,6 +207,7 @@ Main options (with defaults):
   ```
   [localizedrain] storm spawned dim=minecraft:overworld id=... profile=localizedrain:thunderstorm x=120.5 z=-88.0 radius=269.0 vertical=SURFACE minY=48.0 maxY=320.0 stage=0/3 type=localizedrain:rain rain=0.52 thunder=0.0 velocity=0.0,0.0 manual=true lifetimeTicks=-1 stageTicks=5400.0
   ```
+- `logStormSpawnsToChat` (on by default) sends every player in the dimension a chat message whenever a storm spawns, with the center (x, z), Y range, radius and weather type; turn it off if you do not want the messages.
 
 ## Building
 

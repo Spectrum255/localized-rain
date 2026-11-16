@@ -22,6 +22,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.WeakHashMap;
@@ -478,6 +479,8 @@ public final class StormManager {
         }
         // 新风暴立即推送，客户端不必等下一次周期校正
         broadcast(level);
+        reportSpawnToChat(level, spec.profileId(), storm.x, storm.z, storm.minY, storm.maxY, storm.radius,
+                storm.weatherType(profile));
         return snapshot;
     }
 
@@ -487,6 +490,32 @@ public final class StormManager {
             return Config.LOG_STORM_SPAWNS.get();
         } catch (IllegalStateException ignored) {
             return true;
+        }
+    }
+
+    /** 调试：把风暴生成信息发到该维度所有玩家的聊天栏（中心坐标与类型）。 */
+    private static void reportSpawnToChat(ServerLevel level, ResourceLocation profileId,
+                                          double x, double z, double minY, double maxY, double radius,
+                                          ResourceLocation typeId) {
+        boolean enabled;
+        try {
+            enabled = Config.LOG_STORM_SPAWNS_TO_CHAT.get();
+        } catch (IllegalStateException ignored) {
+            return;
+        }
+        if (!enabled) {
+            return;
+        }
+        Component message = Component.translatable("message.localizedrain.storm.spawn_report",
+                profileId.toString(),
+                String.format(Locale.ROOT, "%.1f", x),
+                String.format(Locale.ROOT, "%.1f", z),
+                String.format(Locale.ROOT, "%.0f", minY),
+                String.format(Locale.ROOT, "%.0f", maxY),
+                String.format(Locale.ROOT, "%.1f", radius),
+                typeId.toString());
+        for (ServerPlayer player : level.players()) {
+            player.sendSystemMessage(message);
         }
     }
 

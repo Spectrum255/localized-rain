@@ -102,17 +102,24 @@ public final class Config {
                             "stage, weather type, intensity, velocity, manual flag and lifetime) whenever a storm spawns.")
                     .define("logStormSpawns", true);
 
+    /** 调试：风暴生成时在聊天栏向玩家报告中心坐标与类型。 */
+    public static final ModConfigSpec.BooleanValue LOG_STORM_SPAWNS_TO_CHAT =
+            DEBUG_BUILDER.comment("Report every storm spawn in the chat bar (center coordinates and weather type).",
+                            "Natural storms are infrequent, but disable this if you do not want the messages.")
+                    .define("logStormSpawnsToChat", true);
+
     // 过滤规则（白名单 / 黑名单 / 强制天气）已拆分到 config/localizedrain/ 下的独立文件，
     // 见 FilterConfig：whitelist.toml、blacklist.toml、overrides.toml。
 
     // ---- 移动天气模式（仅 weatherMode=mobile 时生效） ----
 
     public static final ModConfigSpec.EnumValue<WeatherMode> WEATHER_MODE =
-            WEATHER_BUILDER.comment("Weather system mode. Applies at runtime within about a second (or use /weather mode).",
+            WEATHER_BUILDER.comment("Weather system mode. Newly created worlds default to mobile.",
+                            "Applies at runtime within about a second (or use /weather mode).",
                             "patches = existing 3D biome-patch weather",
                             "mobile  = moving storms with wind, evolution and 3D coverage",
                             "vanilla = do not take over vanilla weather at all")
-                    .defineEnum("weatherMode", WeatherMode.PATCHES);
+                    .defineEnum("weatherMode", WeatherMode.MOBILE);
 
     public static final ModConfigSpec.ConfigValue<String> ISOLATED_BIOME_WEATHER =
             WEATHER_BUILDER.comment("Weather inside biomes tagged #localizedrain:storm_isolated (mobile mode only).",

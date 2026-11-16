@@ -14,7 +14,7 @@ Minecraft 原版的天气总是随机触发且全局生效的，这不合理。�
 
 ## 三种天气模式
 
-`weatherMode` 三选一，默认为 `patches`。运行期可用 `/weather mode <patches|mobile|vanilla>` 切换（约 1 秒内生效），也可直接编辑当前存档的 `weather.toml`；两种方式都会热重载，不需要重启游戏。
+`weatherMode` 三选一，新世界默认为 `mobile`（移动云团）。运行期可用 `/weather mode <patches|mobile|vanilla>` 切换（约 1 秒内生效），也可直接编辑当前存档的 `weather.toml`；两种方式都会热重载，不需要重启游戏。
 
 | 模式        | 说明                                                       |
 | --------- | -------------------------------------------------------- |
@@ -129,7 +129,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 | 键                                | 默认        | 说明                                     |
 | -------------------------------- | --------- | -------------------------------------- |
-| `weatherMode`                    | `patches` | `patches` / `mobile` / `vanilla`；运行期热切换（约 1 秒生效，也可用 `/weather mode` 命令） |
+| `weatherMode`                    | `mobile`  | `patches` / `mobile` / `vanilla`；新世界默认 `mobile`，运行期热切换（约 1 秒生效，也可用 `/weather mode` 命令） |
 | `weatherSimulationIntervalTicks` | `20`      | 已加载群系片的推进间隔，越大越省性能                       |
 | `scan3dSubstates`                | `true`    | 是否扫描洞穴/浮岛等 3D 子状态                      |
 | `stateRetentionDays`             | `7`       | 片状态保留天数，`0` 关闭时间清理                     |
@@ -139,6 +139,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `debugLogging`                   | `false`   | 输出片扫描/合并的调试日志                                 |
 | `logWeatherChanges`              | `false`   | 群系片天气变化时输出位置与类型                           |
 | `logStormSpawns`                 | `true`    | 风暴生成时输出详细参数                                |
+| `logStormSpawnsToChat`           | `true`    | 风暴生成时在聊天栏报告中心坐标与类型              |
 
 ### 天气节奏（tick）
 
@@ -208,6 +209,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
   ```
   [localizedrain] storm spawned dim=minecraft:overworld id=... profile=localizedrain:thunderstorm x=120.5 z=-88.0 radius=269.0 vertical=SURFACE minY=48.0 maxY=320.0 stage=0/3 type=localizedrain:rain rain=0.52 thunder=0.0 velocity=0.0,0.0 manual=true lifetimeTicks=-1 stageTicks=5400.0
   ```
+- `logStormSpawnsToChat`（默认开启）在风暴生成时向该维度所有玩家发送一条聊天消息，包含中心坐标 (x, z)、Y 区间、半径与天气类型；嫌打扰时关闭即可。
 
 ## 构建
 
