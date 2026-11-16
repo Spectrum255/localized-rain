@@ -269,16 +269,16 @@ public final class LocalizedWeatherCommand {
                                      int duration, BlockPos pos, double radius) {
         CommandSourceStack source = context.getSource();
         ServerLevel level = source.getLevel();
-        // 移动模式只有强制晴天会拦下手动设置；强制雨/雷不产生降水，允许手动覆盖
-        if (WeatherBiomeFilter.manualBlockedInMobile(level, pos)) {
-            source.sendFailure(Component.translatable("commands.localizedrain.weather.biome_excluded", 1));
-            return 0;
-        }
         int count;
         if (WeatherTypes.CLEAR_ID.equals(typeId)) {
-            // clear 按「列」判断覆盖关系：玩家在高空清除地表风暴也应生效
+            // clear 按「列」判断覆盖关系：玩家在高空清除地表风暴也应生效；强制晴天也允许清除飘过的风暴
             count = StormManager.clearAtColumn(level, pos, radius);
         } else {
+            // 移动模式只有强制晴天会拦下手动设置；强制雨/雷不产生降水，允许手动覆盖
+            if (WeatherBiomeFilter.manualBlockedInMobile(level, pos)) {
+                source.sendFailure(Component.translatable("commands.localizedrain.weather.biome_excluded", 1));
+                return 0;
+            }
             int stormRadius = radius > 0.0D ? (int) Math.round(Math.min(radius, 4096.0D)) : 0;
             StormSnapshot snapshot = StormManager.spawnManual(level, pos, typeId, stormRadius, duration);
             count = snapshot == null ? 0 : 1;

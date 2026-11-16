@@ -109,8 +109,14 @@ final class StormSpawner {
 
     /** 生成点过滤器：只约束生成中心，不拦截后续移动（设计 §7.2）。 */
     private static boolean filterAllows(ServerLevel level, BlockPos pos, StormProfile profile) {
-        // 同时遵守强制天气、锁定晴天与白/黑名单：池里没有该类型就不生成
-        return WeatherBiomeFilter.stormAllowed(level, pos, profile.stage(0).type());
+        // 同时遵守强制天气、锁定晴天与白/黑名单：档案的任意阶段类型被允许即可生成
+        // （thunderstorm 的 thunder 在 stage 1，只看 stage 0 会让强制雷暴群系永远没有自然风暴）
+        for (StormProfile.Stage stage : profile.stages()) {
+            if (WeatherBiomeFilter.stormAllowed(level, pos, stage.type())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 从地表往下找一处「地板 + 5 格空气」的空间，返回可用的竖直区间。 */

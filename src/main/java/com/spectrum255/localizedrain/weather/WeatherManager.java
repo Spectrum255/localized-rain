@@ -734,7 +734,7 @@ public final class WeatherManager {
                         break;
                     }
                     BlockPos center = patchCenter(patch);
-                    if (center == null || WeatherTypes.CLEAR_ID.equals(WeatherBiomeFilter.forcedType(level, patch))) {
+                    if (center == null) {
                         continue;
                     }
                     budget--;
@@ -747,7 +747,7 @@ public final class WeatherManager {
                     break;
                 }
                 BlockPos center = patchCenter(patch);
-                if (center == null || WeatherBiomeFilter.forcedType(level, patch) != null) {
+                if (center == null || WeatherTypes.CLEAR_ID.equals(WeatherBiomeFilter.forcedType(level, patch))) {
                     continue;
                 }
                 // 按尝试次数扣预算：即使生成失败（上限/无档案）也不会继续扫后续片

@@ -18,6 +18,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
@@ -77,15 +79,23 @@ public final class Localizedrain {
             ConfigFiles.seedWorldConfigs(event.getServer(), false);
             LOGGER.info("[localizedrain] per-world configs: {}", ConfigFiles.worldConfigStatus(event.getServer()));
             if (WeatherMode.current() == WeatherMode.MOBILE) {
-                // 移动模式的降水只来自风暴：强制到具体天气只过滤自然生成点，不会产生常驻降水
+                // 移动模式的降水只来自风暴：强制到「会降水」的天气类型只过滤生成点，不会产生常驻降水
+                ServerLevel overworld = event.getServer().overworld();
                 boolean forcedPrecipitation = FilterConfig.BIOME_WEATHER_OVERRIDES.get().stream()
                         .map(entry -> entry.substring(entry.lastIndexOf('=') + 1).trim())
-                        .anyMatch(type -> !type.equals("clear")
-                                && !type.equals(WeatherTypes.CLEAR_ID.toString()));
+                        .map(token -> switch (token) {
+                            case "clear" -> WeatherTypes.CLEAR_ID;
+                            case "rain" -> WeatherTypes.RAIN_ID;
+                            case "thunder" -> WeatherTypes.THUNDER_ID;
+                            default -> ResourceLocation.tryParse(token);
+                        })
+                        .filter(java.util.Objects::nonNull)
+                        .map(id -> WeatherTypes.resolve(overworld, id))
+                        .anyMatch(type -> type != null && type.hasPrecipitation());
                 if (forcedPrecipitation) {
                     LOGGER.warn("[localizedrain] mobile mode: weatherBiomeOverrides only filters natural storm "
-                            + "spawn points; forced rain/thunder will not create precipitation. "
-                            + "Use /weather rain|thunder or set weatherMode=mobile-aware settings (see README).");
+                            + "spawn points; forced precipitation weather does not create rain/snow. "
+                            + "Spawn storms manually, or use weatherMode=patches for persistent biome weather.");
                 }
             }
         });

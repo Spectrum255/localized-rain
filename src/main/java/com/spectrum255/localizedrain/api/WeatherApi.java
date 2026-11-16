@@ -3,6 +3,7 @@ package com.spectrum255.localizedrain.api;
 import com.spectrum255.localizedrain.Config;
 import com.spectrum255.localizedrain.storm.StormManager;
 import com.spectrum255.localizedrain.storm.WindField;
+import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -94,6 +95,10 @@ public final class WeatherApi {
      */
     public static boolean setWeatherAt(ServerLevel level, BlockPos pos, ResourceLocation typeId, int duration) {
         if (WeatherMode.current() == WeatherMode.MOBILE) {
+            // 与命令一致：只有强制晴天阻止手动设置；要清除风暴时不受限制
+            if (!WeatherTypes.CLEAR_ID.equals(typeId) && WeatherBiomeFilter.manualBlockedInMobile(level, pos)) {
+                return false;
+            }
             // 无天光维度不传半径：让档案自己的区间生效（cave_rain 是 48–96）
             int radius = StormManager.allowsManualStorms(level)
                     ? WindField.intConfig(Config.MANUAL_STORM_RADIUS, 128) : 0;
