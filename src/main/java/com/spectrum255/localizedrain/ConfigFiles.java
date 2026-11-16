@@ -205,7 +205,8 @@ public final class ConfigFiles {
                     return 0; // 已是旧值，或用户在该存档里另选过模式
                 }
                 lines.set(index, "weatherMode = " + legacyMode);
-                Files.write(weather, lines, StandardCharsets.UTF_8);
+                // 与 stripRemovedKeys 保持一致：用 \n 拼回并原子替换，避免 Windows 上把整个文件改成 CRLF
+                writeAtomically(weather, String.join("\n", lines) + "\n");
                 markWeatherModeMigrated(marker, legacyMode);
                 Localizedrain.LOGGER.info("[localizedrain] migrated per-world weatherMode {} -> {} in {}",
                         current, legacyMode, weather);
