@@ -102,28 +102,46 @@ public final class WeatherBiomeFilter {
     }
 
     /**
-     * 自然风暴能否在该位置生成：硬锁定或池里没有该类型都不行；强制类型只允许同类型。
+     * 自然风暴能否在该位置生成：白名单/黑名单按「初始阶段类型」判定，强制天气按「档案任意阶段」判定。
      *
-     * <p>这个判定同时遵守白名单池与黑名单剔除，避免「锁定晴天/只允许雨天」的群系里冒出别的风暴。</p>
+     * <p>拆开两种判定是为了同时满足：</p>
+     * <ul>
+     *   <li>黑名单 {@code localizedrain:rain} 必须拦住 stage 0 为雨的多阶段档案（例如雷暴），
+     *       否则后续阶段会绕过按类型过滤；</li>
+     *   <li>强制雷暴的群系必须能生成雷暴档案，而雷暴档案的 stage 0 也是雨。</li>
+     * </ul>
+     *
+     * @param initialType 档案第一个阶段的天气类型
+     * @param stageTypes  档案所有阶段的类型（去重）
      */
-    public static boolean stormAllowed(ServerLevel level, BlockPos pos, ResourceLocation typeId) {
+    public static boolean stormAllowed(ServerLevel level, BlockPos pos, ResourceLocation initialType,
+                                       List<ResourceLocation> stageTypes) {
         String patch = BiomePatches.patchAt(level, pos);
         if (patch == null) {
             return true;
         }
         Decision decision = decision(level, patch);
-        if (decision.hardLock()) {
+        ResourceLocation forced = decision.forced() != null ? decision.forced().id()
+                : (decision.hardLock() ? WeatherTypes.CLEAR_ID : null);
+        if (forced != null) {
+            // 强制天气：任意阶段匹配即可；强制晴天拒绝一切自然风暴
+            return !WeatherTypes.CLEAR_ID.equals(forced) && stageTypes.contains(forced);
+        }
+        if (WeatherTypes.CLEAR_ID.equals(initialType)) {
             return false;
         }
-        if (decision.forced() != null) {
-            return decision.forced().id().equals(typeId);
-        }
+        // 白名单/黑名单只按初始阶段判定
         for (Candidate candidate : decision.pool()) {
-            if (!candidate.clear() && candidate.id().equals(typeId)) {
+            if (!candidate.clear() && candidate.id().equals(initialType)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** 单阶段便利重载：强制类型精确匹配，名单按该类型判定。 */
+    public static boolean stormAllowed(ServerLevel level, BlockPos pos, ResourceLocation typeId) {
+        return stormAllowed(level, pos, typeId, List.of(typeId));
     }
 
     /** 该群系片自然循环时的天气池；被锁定为晴天时为空。 */

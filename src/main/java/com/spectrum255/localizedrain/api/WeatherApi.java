@@ -91,22 +91,25 @@ public final class WeatherApi {
     /**
      * 把该位置所在的群系片设为指定天气（{@link #setWeather} 的坐标版）。
      *
-     * @return 位置无对应群系片（世界外或解析失败）时返回 {@code false}
+     * <p>移动模式下：{@code clear} 只按列移除覆盖该位置的风暴，不使用半径；
+     * 其它类型按档案半径区间生成一个手动风暴，若该位置被强制晴天锁定或没有匹配的档案则返回 {@code false}。</p>
+     *
+     * @return 位置无对应群系片（世界外或解析失败）、被强制晴天锁定、或没有匹配档案时返回 {@code false}
      */
     public static boolean setWeatherAt(ServerLevel level, BlockPos pos, ResourceLocation typeId, int duration) {
         if (WeatherMode.current() == WeatherMode.MOBILE) {
-            // 与命令一致：只有强制晴天阻止手动设置；要清除风暴时不受限制
-            if (!WeatherTypes.CLEAR_ID.equals(typeId) && WeatherBiomeFilter.manualBlockedInMobile(level, pos)) {
+            if (WeatherTypes.CLEAR_ID.equals(typeId)) {
+                // clear 不是「生成晴天风暴」，而是移除覆盖该位置的风暴：不生成、也不使用半径
+                StormManager.clearAtColumn(level, pos, 0.0D);
+                return true;
+            }
+            // 与命令一致：只有强制晴天阻止手动设置
+            if (WeatherBiomeFilter.manualBlockedInMobile(level, pos)) {
                 return false;
             }
             // 无天光维度不传半径：让档案自己的区间生效（cave_rain 是 48–96）
             int radius = StormManager.allowsManualStorms(level)
                     ? WindField.intConfig(Config.MANUAL_STORM_RADIUS, 128) : 0;
-            if (WeatherTypes.CLEAR_ID.equals(typeId)) {
-                // clear 不是「生成晴天风暴」，而是移除覆盖该位置的风暴：成功与否都算处理过
-                StormManager.spawnManual(level, pos, typeId, radius, duration);
-                return true;
-            }
             return StormManager.spawnManual(level, pos, typeId, radius, duration) != null;
         }
         String patch = WeatherManager.patchAt(level, pos);

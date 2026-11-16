@@ -101,7 +101,7 @@
   "commands.localizedrain.storm.area_hint": "The area is approximated by one circular storm; corners may lie outside it",
   "commands.localizedrain.weather.outside": "That position is outside the world height and has no weather",
   "commands.localizedrain.weather.biome_excluded": "All %s location(s) are locked to clear by a forced weather rule; nothing was changed",
-  "commands.localizedrain.weather.biome_skipped": "(%s biome patch(es) skipped by forced weather rules)",
+  "commands.localizedrain.weather.biome_skipped": "(%s location(s) skipped by forced-clear rules)",
   "commands.localizedrain.weather.area.too_large": "The selected area needs %s sample positions; the maximum is %s",
   "commands.localizedrain.weather.area.too_many": "The selected area covers %s biome patch(es); the maximum is %s",
   "commands.localizedrain.weather.area.budget": "The selected area needs more than %s biome patch scans; narrow the area or run /weather at inside it first",

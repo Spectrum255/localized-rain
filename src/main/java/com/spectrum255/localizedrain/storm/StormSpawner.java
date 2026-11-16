@@ -6,6 +6,7 @@ import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
+import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -107,16 +108,24 @@ final class StormSpawner {
                 .build());
     }
 
-    /** 生成点过滤器：只约束生成中心，不拦截后续移动（设计 §7.2）。 */
+    /**
+     * 生成点过滤器：只约束生成中心，不拦截后续移动（设计 §7.2）。
+     *
+     * <p>白名单/黑名单按档案的初始阶段类型判定（避免多阶段档案用后续阶段绕过按类型过滤）；
+     * 强制天气按任意阶段匹配（雷暴档案的初始阶段也是雨）。</p>
+     */
     private static boolean filterAllows(ServerLevel level, BlockPos pos, StormProfile profile) {
-        // 同时遵守强制天气、锁定晴天与白/黑名单：档案的任意阶段类型被允许即可生成
-        // （thunderstorm 的 thunder 在 stage 1，只看 stage 0 会让强制雷暴群系永远没有自然风暴）
-        for (StormProfile.Stage stage : profile.stages()) {
-            if (WeatherBiomeFilter.stormAllowed(level, pos, stage.type())) {
-                return true;
+        List<StormProfile.Stage> stages = profile.stages();
+        if (stages.isEmpty()) {
+            return false;
+        }
+        List<ResourceLocation> stageTypes = new ArrayList<>(stages.size());
+        for (StormProfile.Stage stage : stages) {
+            if (!stageTypes.contains(stage.type())) {
+                stageTypes.add(stage.type());
             }
         }
-        return false;
+        return WeatherBiomeFilter.stormAllowed(level, pos, stages.get(0).type(), stageTypes);
     }
 
     /** 从地表往下找一处「地板 + 5 格空气」的空间，返回可用的竖直区间。 */
