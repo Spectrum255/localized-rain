@@ -48,6 +48,7 @@ Weather is carried by **storms**: each storm is a horizontal circle plus a verti
 - The client is driven by full snapshots (corrected every `stormSyncIntervalTicks`, pushed immediately on spawn/remove/stage change);
   `isolatedBiomeWeather` and `falloffRatio` are delivered with these snapshots, so on a server the server's values win.
 - Lightning is generated with a probability based on the storm's thunder level and `lightningMultiplier`; vanilla difficulty only affects the skeleton-horse trap, which replaces the damaging bolt with a `visualOnly` one.
+- Forced weather means something different in mobile mode: `weatherBiomeOverrides` only filters natural storm spawn points and does not create persistent precipitation for forced rain/thunder biomes (see "Biome weather filters" below).
 
 ## Biome weather filters: whitelist / blacklist / forced weather
 
@@ -69,7 +70,10 @@ Selectors accept a concrete biome, a `namespace:*` pattern, or a `#biome_tag`; w
 | `weatherBiomeWhitelist` | Whitelist: natural cycling for the biome only draws from this weather list                          |
 | `weatherBiomeBlacklist` | Blacklist: the listed weathers never occur in the biome; cycling continues among the remaining ones |
 
-Forced weather locks the biome's weather: natural cycling, commands and the API cannot override it, and natural storms never spawn in that biome (storms that already exist still rain when they drift over it).
+Forced weather behaves differently per mode:
+- **Patch mode (`patches`)**: locks the biome's weather: natural cycling, commands and the API cannot override it, and natural storms never spawn in that biome (storms that already exist still rain when they drift over it).
+- **Mobile mode (`mobile`)**: precipitation only comes from storms. Forcing a concrete weather (rain / thunder / custom type) only acts as a **natural-storm spawn-point filter** and does not create persistent precipitation in that biome; only forced `clear` blocks manual commands/API, while forced rain/thunder no longer blocks them. To get rain in a forced biome under mobile mode, spawn a storm manually (`/weather rain`, `/weather storm ...`, or the storm API).
+
 Whitelist/blacklist only constrain natural cycling; commands can still manually set weather that has been excluded.
 
 ## Weather types and extension API
@@ -182,6 +186,7 @@ Main options (with defaults):
 - Natural storms only spawn in dimensions with sky light and no ceiling; `SURFACE` manual storms are rejected in dimensions without sky light, but `BAND` / `COLUMN` cave storms can still be created manually.
 - Underground `BAND` / `COLUMN` storms only rain, never strike lightning (lightning requires an opening directly above the strike point, `canSeeSky`); non-`SURFACE` thunderstorms in dimensions without sky light or with a ceiling are rejected outright.
 - Stopping the server or switching saves clears the storm static caches; reloading the config resets one-shot warnings.
+- In mobile mode, `weatherBiomeOverrides` forced to a concrete weather (rain/thunder/custom type) does not create precipitation by itself: the rule only filters natural storm spawn points. Spawn a storm manually for precipitation, or use patch mode.
 
 ## Debug logging
 

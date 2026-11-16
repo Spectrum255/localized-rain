@@ -76,6 +76,18 @@ public final class Localizedrain {
             // HEAD 注入时全局 weather.toml 可能还没生成（首次启动）；这里补一次，供下次启动使用
             ConfigFiles.seedWorldConfigs(event.getServer(), false);
             LOGGER.info("[localizedrain] per-world configs: {}", ConfigFiles.worldConfigStatus(event.getServer()));
+            if (WeatherMode.current() == WeatherMode.MOBILE) {
+                // 移动模式的降水只来自风暴：强制到具体天气只过滤自然生成点，不会产生常驻降水
+                boolean forcedPrecipitation = FilterConfig.BIOME_WEATHER_OVERRIDES.get().stream()
+                        .map(entry -> entry.substring(entry.lastIndexOf('=') + 1).trim())
+                        .anyMatch(type -> !type.equals("clear")
+                                && !type.equals(WeatherTypes.CLEAR_ID.toString()));
+                if (forcedPrecipitation) {
+                    LOGGER.warn("[localizedrain] mobile mode: weatherBiomeOverrides only filters natural storm "
+                            + "spawn points; forced rain/thunder will not create precipitation. "
+                            + "Use /weather rain|thunder or set weatherMode=mobile-aware settings (see README).");
+                }
+            }
         });
         // 服务器停止/换存档：清空风暴相关的静态缓存（LAST_HUD、LAST_SYNC、维度缓存等）
         NeoForge.EVENT_BUS.addListener((ServerStoppedEvent event) -> StormManager.resetCaches());

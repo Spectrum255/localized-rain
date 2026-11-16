@@ -734,7 +734,7 @@ public final class WeatherManager {
                         break;
                     }
                     BlockPos center = patchCenter(patch);
-                    if (center == null || WeatherBiomeFilter.forcedType(level, patch) != null) {
+                    if (center == null || WeatherTypes.CLEAR_ID.equals(WeatherBiomeFilter.forcedType(level, patch))) {
                         continue;
                     }
                     budget--;

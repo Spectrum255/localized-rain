@@ -753,8 +753,8 @@ public final class StormManager {
         int spawned = 0;
         int skipped = 0;
         for (ServerPlayer player : level.players()) {
-            // 与模组 /weather 的移动模式入口保持一致：强制天气群系里的玩家跳过
-            if (WeatherBiomeFilter.forcedTypeAt(level, player.blockPosition()) != null) {
+            // 与模组 /weather 的移动模式入口保持一致：只有强制晴天会拦下手动设置
+            if (WeatherBiomeFilter.manualBlockedInMobile(level, player.blockPosition())) {
                 skipped++;
                 continue;
             }

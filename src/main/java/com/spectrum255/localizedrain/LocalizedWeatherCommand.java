@@ -269,8 +269,8 @@ public final class LocalizedWeatherCommand {
                                      int duration, BlockPos pos, double radius) {
         CommandSourceStack source = context.getSource();
         ServerLevel level = source.getLevel();
-        // 与片模式一致：任何强制天气（含强制晴天）所在位置都跳过手动设置
-        if (WeatherBiomeFilter.forcedTypeAt(level, pos) != null) {
+        // 移动模式只有强制晴天会拦下手动设置；强制雨/雷不产生降水，允许手动覆盖
+        if (WeatherBiomeFilter.manualBlockedInMobile(level, pos)) {
             source.sendFailure(Component.translatable("commands.localizedrain.weather.biome_excluded", 1));
             return 0;
         }
@@ -316,7 +316,7 @@ public final class LocalizedWeatherCommand {
         int spawned = 0;
         int skipped = 0;
         for (ServerPlayer player : level.players()) {
-            if (WeatherBiomeFilter.forcedTypeAt(level, player.blockPosition()) != null) {
+            if (WeatherBiomeFilter.manualBlockedInMobile(level, player.blockPosition())) {
                 skipped++;
                 continue;
             }

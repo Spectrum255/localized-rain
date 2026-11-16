@@ -91,6 +91,17 @@ public final class WeatherBiomeFilter {
     }
 
     /**
+     * 移动模式下手动设置是否被阻止：只认强制晴天。
+     *
+     * <p>移动模式的降水完全来自风暴，强制到具体天气（雨/雷/自定义类型）只会过滤自然风暴的生成点，
+     * 不会在群系里产生常驻降水；因此这里不再拦下命令/API 的手动设置，否则该群系会变成
+     * 「永远无天气且不可改写」。强制晴天仍然阻止手动设置。</p>
+     */
+    public static boolean manualBlockedInMobile(ServerLevel level, BlockPos pos) {
+        return WeatherTypes.CLEAR_ID.equals(forcedTypeAt(level, pos));
+    }
+
+    /**
      * 自然风暴能否在该位置生成：硬锁定或池里没有该类型都不行；强制类型只允许同类型。
      *
      * <p>这个判定同时遵守白名单池与黑名单剔除，避免「锁定晴天/只允许雨天」的群系里冒出别的风暴。</p>
