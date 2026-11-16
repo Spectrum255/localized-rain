@@ -49,6 +49,7 @@ Weather is carried by **storms**: each storm is a horizontal circle plus a verti
   `isolatedBiomeWeather` and `falloffRatio` are delivered with these snapshots, so on a server the server's values win.
 - Lightning is generated with a probability based on the storm's thunder level and `lightningMultiplier`; vanilla difficulty only affects the skeleton-horse trap, which replaces the damaging bolt with a `visualOnly` one.
 - Forced weather means something different in mobile mode: `weatherBiomeOverrides` only filters natural storm spawn points and does not create persistent precipitation for forced rain/thunder biomes (see "Biome weather filters" below).
+- Natural spawning only picks points inside loaded chunks (the effective radius is the simulation distance minus 2 chunks; about 96–160 blocks at simulation distance 12) and drifts toward the player from upwind; each check rolls `naturalStormSpawnChance` (default `0.035`, roughly one storm every 4.8 minutes) to decide whether a storm actually spawns.
 
 ## Biome weather filters: whitelist / blacklist / forced weather
 
@@ -160,7 +161,8 @@ Main options (with defaults):
 | `maxStormsPerPlayer`                    | `2`             | Natural storm limit near each player               |
 | `maxManualStormsPerDimension`           | `16`            | Manual storm limit (commands/API)                  |
 | `spawnIntervalTicks`                    | `200`           | Natural spawn check interval                       |
-| `spawnMinDistance` / `spawnMaxDistance` | `300` / `700`   | Distance range from the player for spawn points    |
+| `spawnMinDistance` / `spawnMaxDistance` | `300` / `700`   | Distance range from the player for spawn points (clamped to the simulation distance) |
+| `naturalStormSpawnChance`               | `0.035`         | Chance that each check actually spawns a natural storm (about one per 4.8 min; 0 = off) |
 | `windChangeIntervalTicks`               | `1200`          | Wind field change interval                         |
 | `windMinSpeed` / `windMaxSpeed`         | `0.02` / `0.08` | Wind speed range (blocks/tick)                     |
 | `despawnDistance`                       | `1000`          | Distance at which natural storms fade out          |

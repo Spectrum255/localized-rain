@@ -152,8 +152,17 @@ public final class Config {
                     .defineInRange("spawnMinDistance", 300, 32, 4096);
 
     public static final ModConfigSpec.IntValue STORM_SPAWN_MAX_DISTANCE =
-            WEATHER_BUILDER.comment("Maximum spawn distance from the chosen player, in blocks.")
+            WEATHER_BUILDER.comment("Maximum spawn distance from the chosen player, in blocks.",
+                            "The effective maximum is clamped to the current simulation distance, so the",
+                            "probe chunk is loaded; with server-side simulation distance 12 this is 160 blocks.")
                     .defineInRange("spawnMaxDistance", 700, 32, 8192);
+
+    public static final ModConfigSpec.DoubleValue NATURAL_STORM_SPAWN_CHANCE =
+            WEATHER_BUILDER.comment("Chance that a scheduled natural storm spawn attempt actually spawns a storm.",
+                            "Attempts happen every spawnIntervalTicks (default 200 ticks = 10 s).",
+                            "0.035 is about one natural storm every 4.8 minutes, roughly 3x the old observed rate;",
+                            "0 disables natural spawning, 1 spawns on every attempt.")
+                    .defineInRange("naturalStormSpawnChance", 0.035D, 0.0D, 1.0D);
 
     public static final ModConfigSpec.IntValue WIND_CHANGE_INTERVAL_TICKS =
             WEATHER_BUILDER.comment("How often (in ticks) the dimension wind direction is re-rolled.")

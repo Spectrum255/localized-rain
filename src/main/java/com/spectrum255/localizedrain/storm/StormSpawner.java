@@ -1,6 +1,7 @@
 package com.spectrum255.localizedrain.storm;
 
 import com.spectrum255.localizedrain.Config;
+import com.spectrum255.localizedrain.Localizedrain;
 import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
@@ -28,6 +29,7 @@ final class StormSpawner {
             return;
         }
         if (!level.dimensionType().hasSkyLight() || level.dimensionType().hasCeiling()) {
+            debugSpawn("dimension has no sky light or has a ceiling");
             return;                     // 自然风暴只生成在有天光、无天花板的维度（下界/末地不会长风暴）
         }
         StormData data = StormManager.data(level);
@@ -41,21 +43,39 @@ final class StormSpawner {
         int maxStorms = WindField.intConfig(Config.MAX_STORMS_PER_DIMENSION, 8);
         long naturalStorms = StormManager.all(level).stream().filter(storm -> !storm.manual()).count();
         if (naturalStorms >= maxStorms) {
+            debugSpawn("natural storm cap reached");
             return;                                     // 上限只约束自然风暴，手动风暴不占用名额
         }
         List<ServerPlayer> players = level.players();
         if (players.isEmpty()) {
+            debugSpawn("no players in the dimension");
             return;
         }
         RandomSource random = level.getRandom();
         ServerPlayer player = players.get(random.nextInt(players.size()));
         if (ownedBy(level, player) >= WindField.intConfig(Config.MAX_STORMS_PER_PLAYER, 2)) {
+            debugSpawn("per-player natural storm cap reached");
             return;
         }
 
-        int minDistance = WindField.intConfig(Config.STORM_SPAWN_MIN_DISTANCE, 300);
-        int maxDistance = Math.max(minDistance, WindField.intConfig(Config.STORM_SPAWN_MAX_DISTANCE, 700));
-        double distance = minDistance + random.nextDouble() * (maxDistance - minDistance);
+        // 生成率：每次检查只按概率真正尝试生成。默认 0.035 约等于每 4.8 分钟一个（旧实测约 1/14 分钟，约 3 倍）。
+        double spawnChance = WindField.doubleConfig(Config.NATURAL_STORM_SPAWN_CHANCE, 0.035D);
+        if (spawnChance <= 0.0D || random.nextDouble() >= spawnChance) {
+            debugSpawn("spawn chance roll failed");
+            return;
+        }
+
+        int configuredMin = WindField.intConfig(Config.STORM_SPAWN_MIN_DISTANCE, 300);
+        int configuredMax = Math.max(configuredMin, WindField.intConfig(Config.STORM_SPAWN_MAX_DISTANCE, 700));
+        // 只在已加载半径内选点：300–700 格通常超过模拟距离（12 区块 = 192 格），probe 未加载会被静默丢弃。
+        double loadedRadius = level.getServer().getPlayerList().getSimulationDistance() * 16.0D - 32.0D;
+        if (loadedRadius < 48.0D) {
+            debugSpawn("simulation distance is too small for a spawn probe");
+            return;
+        }
+        double effectiveMax = Math.min(configuredMax, loadedRadius);
+        double effectiveMin = Math.min(configuredMin, effectiveMax * 0.6D);
+        double distance = effectiveMin + random.nextDouble() * Math.max(1.0D, effectiveMax - effectiveMin);
 
         // 上风向生成：把风场方向反过来
         WindField wind = data.wind();
@@ -74,9 +94,11 @@ final class StormSpawner {
         double z = player.getZ() - directionZ * distance;
         BlockPos probe = BlockPos.containing(x, player.getY(), z);
         if (!level.isLoaded(probe)) {
+            debugSpawn("spawn probe chunk is not loaded");
             return;
         }
         if (StormManager.isIsolatedAt(level, probe)) {
+            debugSpawn("spawn probe is in an isolated biome");
             return;                                     // 隔离群系是绝对生成禁区
         }
         int surfaceY = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, probe).getY();
@@ -89,28 +111,46 @@ final class StormSpawner {
             holder = StormProfiles.randomNatural(level, random,
                     profile -> WeatherTypes.RAIN_ID.equals(profile.stage(0).type())).orElse(null);
             if (holder == null || !filterAllows(level, probe, holder.value())) {
+                debugSpawn("no cave-capable profile or filter rejected");
                 return;
             }
             int radius = WindField.intConfig(Config.CAVE_STORM_RADIUS, 64);
-            StormManager.spawn(level, StormSpawnSpec
+            if (StormManager.spawn(level, StormSpawnSpec
                     .builder(holder.key().location(), new Vec3(x, surfaceY, z))
                     .radius(radius)
                     .verticalBand(band[0], band[1])
                     .manual(false)
-                    .build());
+                    .build()) == null) {
+                debugSpawn("StormManager rejected the cave storm");
+            }
             return;
         }
         holder = StormProfiles.randomNatural(level, random).orElse(null);
         if (holder == null) {
+            debugSpawn("no natural profile available");
             return;
         }
         if (!filterAllows(level, probe, holder.value())) {
+            debugSpawn("filter rejected the spawn probe");
             return;
         }
-        StormManager.spawn(level, StormSpawnSpec
+        if (StormManager.spawn(level, StormSpawnSpec
                 .builder(holder.key().location(), new Vec3(x, surfaceY, z))
                 .manual(false)
-                .build());
+                .build()) == null) {
+            debugSpawn("StormManager rejected the natural storm");
+        }
+    }
+
+    /** 调试开关打开时记录自然生成被跳过的原因，便于运行期排查（每个检查周期最多一条）。 */
+    private static void debugSpawn(String reason) {
+        try {
+            if (Config.DEBUG_LOGGING.get()) {
+                Localizedrain.LOGGER.info("[LRDBG] storm spawn skipped: {}", reason);
+            }
+        } catch (IllegalStateException ignored) {
+            // 配置尚未加载：静默跳过
+        }
     }
 
     /**

@@ -49,6 +49,7 @@ Minecraft 原版的天气总是随机触发且全局生效的，这不合理。�
   `isolatedBiomeWeather` 与 `falloffRatio` 随快照下发，联机时以服务端为准。
 - 落雷按风暴的雷量与 `lightningMultiplier` 概率生成；原版难度只影响骷髅马陷阱，陷阱会以 `visualOnly` 闪电代替伤害。
 - 强制天气在移动模式下的含义不同：`weatherBiomeOverrides` 只过滤自然风暴的生成点，不会为强制雨/雷的群系生成常驻降水（详见下方「群系天气过滤器」）。
+- 自然生成只在**已加载区块**内选点（实际半径 = 模拟距离 − 2 区块；模拟距离 12 时约 96–160 格），并沿上风向漂向玩家；每次检查按 `naturalStormSpawnChance`（默认 `0.035`，约 4.8 分钟一个）决定是否真正生成。
 
 ## 群系天气过滤器：白名单 / 黑名单 / 强制天气
 
@@ -159,7 +160,8 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `maxStormsPerPlayer`                    | `2`             | 每位玩家附近自然风暴上限                          |
 | `maxManualStormsPerDimension`           | `16`            | 手动风暴上限（命令/API）                        |
 | `spawnIntervalTicks`                    | `200`           | 自然生成检查间隔                              |
-| `spawnMinDistance` / `spawnMaxDistance` | `300` / `700`   | 生成点与玩家的距离范围                           |
+| `spawnMinDistance` / `spawnMaxDistance` | `300` / `700`   | 生成点与玩家的距离范围（超出模拟距离时自动收敛）              |
+| `naturalStormSpawnChance`               | `0.035`         | 每次检查真正生成自然风暴的概率（约 4.8 分钟一个；0 = 关闭）     |
 | `windChangeIntervalTicks`               | `1200`          | 风场变化间隔                                |
 | `windMinSpeed` / `windMaxSpeed`         | `0.02` / `0.08` | 风速范围（格/tick）                          |
 | `despawnDistance`                       | `1000`          | 自然风暴远离玩家的消亡距离                         |

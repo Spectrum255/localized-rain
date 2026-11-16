@@ -58,7 +58,7 @@ public final class ConfigFiles {
             "maxStoredStates", "maxParentEntries", "maxColumnScansPerTick",
             "weatherMode", "isolatedBiomeWeather", "naturalCaveStorms", "caveStormRadius",
             "maxStormsPerDimension", "maxStormsPerPlayer", "maxManualStormsPerDimension",
-            "spawnIntervalTicks", "spawnMinDistance", "spawnMaxDistance",
+            "spawnIntervalTicks", "spawnMinDistance", "spawnMaxDistance", "naturalStormSpawnChance",
             "windChangeIntervalTicks", "windMinSpeed", "windMaxSpeed",
             "despawnDistance", "despawnGraceTicks",
             "stormSyncIntervalTicks", "falloffRatio", "lightningMultiplier");
