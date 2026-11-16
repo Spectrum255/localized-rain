@@ -28,10 +28,6 @@ final class StormSpawner {
         if (WeatherMode.current() != WeatherMode.MOBILE) {
             return;
         }
-        if (!level.dimensionType().hasSkyLight() || level.dimensionType().hasCeiling()) {
-            debugSpawn("dimension has no sky light or has a ceiling");
-            return;                     // 自然风暴只生成在有天光、无天花板的维度（下界/末地不会长风暴）
-        }
         StormData data = StormManager.data(level);
         if (level.getGameTime() < data.nextSpawnTick()) {
             return;
@@ -39,6 +35,12 @@ final class StormSpawner {
         int interval = WindField.intConfig(Config.STORM_SPAWN_INTERVAL_TICKS, 200);
         data.setNextSpawnTick(level.getGameTime() + Math.max(20, interval));
         data.setDirty();
+        // 维度守卫放在节流之后：下界/末地每 tick 都会被调用，日志必须随 nextSpawnTick 一起节流，
+        // 否则每 tick 一条 [LRDBG]，21 分钟能刷出 4.5 万行。
+        if (!level.dimensionType().hasSkyLight() || level.dimensionType().hasCeiling()) {
+            debugSpawn("dimension has no sky light or has a ceiling");
+            return;                     // 自然风暴只生成在有天光、无天花板的维度（下界/末地不会长风暴）
+        }
 
         int maxStorms = WindField.intConfig(Config.MAX_STORMS_PER_DIMENSION, 8);
         long naturalStorms = StormManager.all(level).stream().filter(storm -> !storm.manual()).count();
