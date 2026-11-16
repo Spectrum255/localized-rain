@@ -44,7 +44,6 @@
   "localizedrain.configuration.windMaxSpeed": "Maximum wind speed (blocks/tick)",
   "localizedrain.configuration.despawnDistance": "Distance at which a natural storm starts to fade (blocks)",
   "localizedrain.configuration.despawnGraceTicks": "How long a natural storm must stay far away before fading (ticks)",
-  "localizedrain.configuration.manualStormRadius": "Default radius for single-position manual storms (blocks)",
   "localizedrain.configuration.stormSyncIntervalTicks": "Full storm sync interval (ticks)",
   "localizedrain.configuration.falloffRatio": "Storm intensity falloff band width (fraction of radius)",
   "localizedrain.configuration.lightningMultiplier": "Storm lightning frequency multiplier",
@@ -80,7 +79,6 @@
   "localizedrain.configuration.windMaxSpeed.tooltip": "Maximum wind speed in blocks per tick.",
   "localizedrain.configuration.despawnDistance.tooltip": "A natural storm this far from every player starts its despawn grace timer, in blocks.",
   "localizedrain.configuration.despawnGraceTicks.tooltip": "How long a natural storm must stay too far away before it fades out, in ticks.",
-  "localizedrain.configuration.manualStormRadius.tooltip": "Radius used when a manual storm is created from a single position (setWeatherAt), in blocks.",
   "localizedrain.configuration.stormSyncIntervalTicks.tooltip": "How often (in ticks) the full storm list is re-sent to clients as a correction.",
   "localizedrain.configuration.falloffRatio.tooltip": "Width of the storm intensity falloff band, as a fraction of the storm radius; larger values give a softer edge.",
   "localizedrain.configuration.lightningMultiplier.tooltip": "Lightning frequency multiplier for storms; 0 disables storm lightning.",
@@ -131,7 +129,7 @@
   "commands.localizedrain.storm.no_profile": "No storm profile is available for that weather type; check whether a matching storm_profile is provided by a data pack",
   "commands.localizedrain.storm.thunder_unavailable": "This dimension has no skylight or has a ceiling: cave storms never strike, so thunder weather cannot be spawned here",
   "commands.localizedrain.storm.partial_spawned": "(only %s of %s manual storms were spawned: the manual storm limit was reached)",
-  "commands.localizedrain.storm.players_skipped": "(%s player(s) skipped: their biome is pinned by a forced weather rule)",
+  "commands.localizedrain.storm.players_skipped": "(%s player(s) skipped: their biome is pinned by forced-clear rules)",
   "commands.localizedrain.storm.no_players": "No players in this dimension; nothing was spawned",
   "message.localizedrain.protocol_mismatch": "Your client is missing a matching Localized Rain version (or uses an incompatible protocol); weather and storm sync are unavailable"
 }

@@ -164,7 +164,6 @@ Main options (with defaults):
 | `windMinSpeed` / `windMaxSpeed`         | `0.02` / `0.08` | Wind speed range (blocks/tick)                     |
 | `despawnDistance`                       | `1000`          | Distance at which natural storms fade out          |
 | `despawnGraceTicks`                     | `600`           | How long a storm stays far away before fading      |
-| `manualStormRadius`                     | `128`           | Default radius for manual storms                   |
 | `stormSyncIntervalTicks`                | `40`            | Storm snapshot correction interval                 |
 | `falloffRatio`                          | `0.3`           | Width ratio of the fading edge around a storm      |
 | `lightningMultiplier`                   | `1.0`           | Lightning probability multiplier; `0` disables     |

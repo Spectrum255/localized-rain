@@ -120,9 +120,7 @@ public final class WeatherBiomeFilter {
         if (patch == null) {
             return true;
         }
-        Decision decision = decision(level, patch);
-        ResourceLocation forced = decision.forced() != null ? decision.forced().id()
-                : (decision.hardLock() ? WeatherTypes.CLEAR_ID : null);
+        ResourceLocation forced = forcedType(level, patch);
         if (forced != null) {
             // 强制天气：任意阶段匹配即可；强制晴天拒绝一切自然风暴
             return !WeatherTypes.CLEAR_ID.equals(forced) && stageTypes.contains(forced);
@@ -131,7 +129,7 @@ public final class WeatherBiomeFilter {
             return false;
         }
         // 白名单/黑名单只按初始阶段判定
-        for (Candidate candidate : decision.pool()) {
+        for (Candidate candidate : pool(level, patch)) {
             if (!candidate.clear() && candidate.id().equals(initialType)) {
                 return true;
             }
@@ -139,7 +137,12 @@ public final class WeatherBiomeFilter {
         return false;
     }
 
-    /** 单阶段便利重载：强制类型精确匹配，名单按该类型判定。 */
+    /**
+     * 单类型便利重载：强制类型精确匹配、名单按该类型判定。
+     *
+     * <p>它会同时把该类型当作「初始阶段类型」和「全部阶段类型」；不知道档案阶段时请用四参重载。
+     * 例如强制雷暴的群系里，雷暴档案的初始阶段是雨，用本重载会被判为不允许。</p>
+     */
     public static boolean stormAllowed(ServerLevel level, BlockPos pos, ResourceLocation typeId) {
         return stormAllowed(level, pos, typeId, List.of(typeId));
     }

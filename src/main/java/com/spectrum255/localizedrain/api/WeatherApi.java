@@ -1,8 +1,6 @@
 package com.spectrum255.localizedrain.api;
 
-import com.spectrum255.localizedrain.Config;
 import com.spectrum255.localizedrain.storm.StormManager;
-import com.spectrum255.localizedrain.storm.WindField;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.ArrayList;
@@ -99,6 +97,10 @@ public final class WeatherApi {
     public static boolean setWeatherAt(ServerLevel level, BlockPos pos, ResourceLocation typeId, int duration) {
         if (WeatherMode.current() == WeatherMode.MOBILE) {
             if (WeatherTypes.CLEAR_ID.equals(typeId)) {
+                // 世界外 / 解析不到群系片的坐标不算「清除成功」，与 @return 一致
+                if (level.isOutsideBuildHeight(pos) || WeatherManager.patchAt(level, pos) == null) {
+                    return false;
+                }
                 // clear 不是「生成晴天风暴」，而是移除覆盖该位置的风暴：不生成、也不使用半径
                 StormManager.clearAtColumn(level, pos, 0.0D);
                 return true;
@@ -107,10 +109,8 @@ public final class WeatherApi {
             if (WeatherBiomeFilter.manualBlockedInMobile(level, pos)) {
                 return false;
             }
-            // 无天光维度不传半径：让档案自己的区间生效（cave_rain 是 48–96）
-            int radius = StormManager.allowsManualStorms(level)
-                    ? WindField.intConfig(Config.MANUAL_STORM_RADIUS, 128) : 0;
-            return StormManager.spawnManual(level, pos, typeId, radius, duration) != null;
+            // 半径传 0：交给档案自己的区间（例如 drizzle 180–320），与 /weather 命令一致
+            return StormManager.spawnManual(level, pos, typeId, 0, duration) != null;
         }
         String patch = WeatherManager.patchAt(level, pos);
         if (patch == null) {

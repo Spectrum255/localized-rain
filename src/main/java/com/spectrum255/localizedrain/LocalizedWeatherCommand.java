@@ -344,7 +344,7 @@ public final class LocalizedWeatherCommand {
         }
         if (skipped > 0) {
             message = message.copy().append(Component.literal(" ")).append(
-                    Component.translatable("commands.localizedrain.weather.biome_skipped", skipped));
+                    Component.translatable("commands.localizedrain.storm.players_skipped", skipped));
         }
         Component finalMessage = message;
         source.sendSuccess(() -> finalMessage, true);
@@ -533,7 +533,8 @@ public final class LocalizedWeatherCommand {
                 Math.max(from.getY(), to.getY()) + 0.5D,
                 (from.getZ() + to.getZ()) / 2.0D + 0.5D);
         double horizontal = Math.hypot((double) from.getX() - to.getX(), (double) from.getZ() - to.getZ());
-        double radius = horizontal / 2.0D + WindField.intConfig(Config.MANUAL_STORM_RADIUS, 128);
+        // 区域风暴半径 = 矩形半对角线 + 64 格缓冲
+        double radius = horizontal / 2.0D + 64.0D;
         StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, center)
                 .radius(radius)
                 .manual(true);

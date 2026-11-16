@@ -175,10 +175,6 @@ public final class Config {
             WEATHER_BUILDER.comment("How long a natural storm must stay too far away before it fades out.")
                     .defineInRange("despawnGraceTicks", 600, 0, 24000);
 
-    public static final ModConfigSpec.IntValue MANUAL_STORM_RADIUS =
-            WEATHER_BUILDER.comment("Radius used when a manual storm is created from a single position (setWeatherAt).")
-                    .defineInRange("manualStormRadius", 128, 16, 2048);
-
     public static final ModConfigSpec.IntValue STORM_SYNC_INTERVAL_TICKS =
             WEATHER_BUILDER.comment("How often (in ticks) the full storm list is re-sent to clients as a correction.")
                     .defineInRange("stormSyncIntervalTicks", 40, 5, 1200);

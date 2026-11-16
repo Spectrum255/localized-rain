@@ -43,7 +43,7 @@ public final class ConfigFiles {
             "maxStormsPerDimension", "maxStormsPerPlayer", "maxManualStormsPerDimension",
             "spawnIntervalTicks", "spawnMinDistance", "spawnMaxDistance",
             "windChangeIntervalTicks", "windMinSpeed", "windMaxSpeed",
-            "despawnDistance", "despawnGraceTicks", "manualStormRadius",
+            "despawnDistance", "despawnGraceTicks",
             "stormSyncIntervalTicks", "falloffRatio", "lightningMultiplier");
     private static final List<String> FILTER_KEYS = List.of(
             "weatherBiomeWhitelist", "weatherBiomeBlacklist", "weatherBiomeOverrides");

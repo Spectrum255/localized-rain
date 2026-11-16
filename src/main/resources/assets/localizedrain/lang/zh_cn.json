@@ -44,7 +44,6 @@
   "localizedrain.configuration.windMaxSpeed": "最大风速（方块/tick）",
   "localizedrain.configuration.despawnDistance": "自然风暴开始淡出的距离（方块）",
   "localizedrain.configuration.despawnGraceTicks": "远离玩家多久后淡出（tick）",
-  "localizedrain.configuration.manualStormRadius": "单点手动风暴的默认半径（方块）",
   "localizedrain.configuration.stormSyncIntervalTicks": "风暴全量同步间隔（tick）",
   "localizedrain.configuration.falloffRatio": "风暴强度衰减带宽度（相对半径）",
   "localizedrain.configuration.lightningMultiplier": "风暴落雷频率倍率",
@@ -80,7 +79,6 @@
   "localizedrain.configuration.windMaxSpeed.tooltip": "风速上限（方块/tick）。",
   "localizedrain.configuration.despawnDistance.tooltip": "自然风暴距离所有玩家都超过这个距离时，开始进入淡出倒计时（方块）。",
   "localizedrain.configuration.despawnGraceTicks.tooltip": "自然风暴需要持续远离玩家多久才开始淡出（tick）。",
-  "localizedrain.configuration.manualStormRadius.tooltip": "通过单点 API（setWeatherAt）创建手动风暴时使用的默认半径（方块）。",
   "localizedrain.configuration.stormSyncIntervalTicks.tooltip": "完整风暴列表重新发送给客户端进行校正的间隔（tick）。",
   "localizedrain.configuration.falloffRatio.tooltip": "风暴强度衰减带的宽度（相对半径的比例）；越大边缘过渡越平缓。",
   "localizedrain.configuration.lightningMultiplier.tooltip": "风暴落雷频率的倍率；0 表示关闭风暴落雷。",
@@ -131,7 +129,7 @@
   "commands.localizedrain.storm.no_profile": "没有可用于该天气类型的风暴档案；请检查数据包是否提供了匹配的 storm_profile",
   "commands.localizedrain.storm.thunder_unavailable": "该维度没有天光或有天花板：洞穴风暴永远不会落雷，不能在这里生成雷暴类型",
   "commands.localizedrain.storm.partial_spawned": "其中 %s / %s 个成功生成：达到手动风暴上限，部分玩家没有获得天气",
-  "commands.localizedrain.storm.players_skipped": "（%s 位玩家位于强制天气群系，已跳过）",
+  "commands.localizedrain.storm.players_skipped": "（%s 位玩家位于强制晴天群系，已跳过）",
   "commands.localizedrain.storm.no_players": "当前维度没有玩家，未生成任何风暴",
   "message.localizedrain.protocol_mismatch": "你的客户端未安装同版本的 Localized Rain（或网络协议不匹配），天气与风暴同步将不可用"
 }

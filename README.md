@@ -163,7 +163,6 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `windMinSpeed` / `windMaxSpeed`         | `0.02` / `0.08` | 风速范围（格/tick）                          |
 | `despawnDistance`                       | `1000`          | 自然风暴远离玩家的消亡距离                         |
 | `despawnGraceTicks`                     | `600`           | 远离多久后开始淡出                             |
-| `manualStormRadius`                     | `128`           | 手动风暴默认半径                              |
 | `stormSyncIntervalTicks`                | `40`            | 风暴快照校正间隔                              |
 | `falloffRatio`                          | `0.3`           | 风暴边缘的衰减宽度比例                           |
 | `lightningMultiplier`                   | `1.0`           | 落雷概率倍率，`0` 关闭                         |
