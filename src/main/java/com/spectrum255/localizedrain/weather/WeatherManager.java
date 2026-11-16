@@ -179,19 +179,6 @@ public final class WeatherManager {
         return WeatherMode.current() == WeatherMode.MOBILE;
     }
 
-    /** 片入口在移动模式下没有映射，只警告一次，避免每 tick 刷日志。 */
-    private static boolean warnedPatchApi;
-
-    private static void warnPatchApiUnsupported() {
-        if (warnedPatchApi) {
-            return;
-        }
-        warnedPatchApi = true;
-        com.spectrum255.localizedrain.Localizedrain.LOGGER.warn(
-                "[localizedrain] setWeather(patches, ...) has no effect in mobile mode; "
-                        + "use setWeatherAt / spawnStorm instead");
-    }
-
     private static void tickPatches(ServerLevel level) {
         // 天气按维度独立推进；无天光维度（下界/末地等）同样参与，是否真的出现天气由群系降水类型、
         // 名单与命令/API 决定（原版下界/末地群系本身没有降水，默认仍然是晴天）
@@ -433,7 +420,7 @@ public final class WeatherManager {
         }
         try {
             return new BlockPos(Integer.parseInt(parts[0]) * 16 + 8,
-                    Integer.parseInt(parts[1]), Integer.parseInt(parts[2]) * 16 + 8);
+                    Integer.parseInt(parts[2]), Integer.parseInt(parts[1]) * 16 + 8);
         } catch (NumberFormatException ignored) {
             return null;
         }
@@ -734,8 +721,42 @@ public final class WeatherManager {
     public static void setWeather(ServerLevel level, Collection<String> patches,
                                   ResourceLocation typeId, int duration) {
         if (mobileMode()) {
-            // 移动模式没有「片」的概念，无法从片 key 反推坐标；坐标入口见 setWeatherAt / 命令 / 原版 /weather
-            warnPatchApiUnsupported();
+            // 移动模式没有「片」的概念：把每个片中心转换成一次手动风暴，让命令/API 与片模式同样生效。
+            // 最多尝试「手动风暴上限」次，避免 global 对成千上万个片逐个 removeWhere 扫描。
+            if (typeId == null) {
+                return;
+            }
+            int budget = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);
+            if (WeatherTypes.CLEAR_ID.equals(typeId)) {
+                // clear 不生成风暴：按处理过的片数扣预算，避免对全维度片逐个扫描
+                for (String patch : patches) {
+                    if (budget <= 0) {
+                        break;
+                    }
+                    BlockPos center = patchCenter(patch);
+                    if (center == null || WeatherBiomeFilter.forcedType(level, patch) != null) {
+                        continue;
+                    }
+                    budget--;
+                    StormManager.clearAtColumn(level, center, 0.0D);
+                }
+                return;
+            }
+            for (String patch : patches) {
+                if (budget <= 0) {
+                    break;
+                }
+                BlockPos center = patchCenter(patch);
+                if (center == null || WeatherBiomeFilter.forcedType(level, patch) != null) {
+                    continue;
+                }
+                // 按尝试次数扣预算：即使生成失败（上限/无档案）也不会继续扫后续片
+                budget--;
+                StormManager.spawnManual(level, center, typeId, 0, duration);
+                if (budget <= 0) {
+                    break;
+                }
+            }
             return;
         }
         if (typeId == null) {

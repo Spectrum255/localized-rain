@@ -234,6 +234,44 @@ public final class StormManager {
         return removedIds.size();
     }
 
+    /** 清空该维度全部风暴（自然 + 手动），返回移除数量；只广播一次。 */
+    public static int clearAllStorms(ServerLevel level) {
+        return removeWhere(level, snapshot -> true, StormRemoveEvent.Reason.CLEARED, true);
+    }
+
+    /** 清除与给定位置/半径相交的风暴，返回移除数量；radius {@code <= 0} 表示只清除覆盖该点的风暴。 */
+    public static int clearAt(ServerLevel level, BlockPos pos, double radius) {
+        double px = pos.getX() + 0.5D;
+        double py = pos.getY() + 0.5D;
+        double pz = pos.getZ() + 0.5D;
+        double reach = Math.max(0.0D, radius);
+        return removeWhere(level, snapshot -> {
+            if (py < snapshot.minY() || py > snapshot.maxY()) {
+                return false;
+            }
+            double dx = snapshot.x() - px;
+            double dz = snapshot.z() - pz;
+            double limit = snapshot.radius() + reach;
+            return dx * dx + dz * dz <= limit * limit;
+        }, StormRemoveEvent.Reason.CLEARED, true);
+    }
+
+    /**
+     * 只按水平距离清除风暴，不检查 Y 区间。
+     * 命令按区域清除时使用：玩家站在高空也能清掉脚下的地表风暴。
+     */
+    public static int clearAtColumn(ServerLevel level, BlockPos pos, double radius) {
+        double px = pos.getX() + 0.5D;
+        double pz = pos.getZ() + 0.5D;
+        double reach = Math.max(0.0D, radius);
+        return removeWhere(level, snapshot -> {
+            double dx = snapshot.x() - px;
+            double dz = snapshot.z() - pz;
+            double limit = snapshot.radius() + reach;
+            return dx * dx + dz * dz <= limit * limit;
+        }, StormRemoveEvent.Reason.CLEARED, true);
+    }
+
     public static WindState wind(ServerLevel level) {
         return data(level).wind().state();
     }
@@ -258,6 +296,12 @@ public final class StormManager {
                 NeoForge.EVENT_BUS.post(new StormRemoveEvent(level, storm.id(),
                         StormRemoveEvent.Reason.MISSING_PROFILE));
                 continue;
+            }
+            // 类型变化（阶段推进 / 手动覆盖 / 读档后）时刷新能力位，保证雷量不会在「雨天」里残留
+            ResourceLocation effectiveType = storm.weatherType(profile);
+            if (!effectiveType.equals(storm.capabilityType)) {
+                storm.capabilityType = effectiveType;
+                storm.applyCapabilities(WeatherTypes.resolve(level, effectiveType));
             }
             if (!storm.dying()) {
                 if (!storm.manual()) {
@@ -408,8 +452,12 @@ public final class StormManager {
         storm.stageTicksTotal = storm.stageTicksLeft =
                 spec.lifetimeTicks() > 0 ? spec.lifetimeTicks() : StormObject.pickTicks(storm.seed, stage);
         storm.lifeTicksLeft = spec.lifetimeTicks();
-        storm.rainIntensity = spec.rainIntensity().orElse(stage.rain().lerp(0.0F));
-        storm.thunderIntensity = spec.thunderIntensity().orElse(stage.thunder().lerp(0.0F));
+        WeatherType resolvedType = WeatherTypes.resolve(level, effectiveType);
+        spec.rainIntensity().ifPresent(intensity -> storm.rainIntensity = intensity);
+        spec.thunderIntensity().ifPresent(intensity -> storm.thunderIntensity = intensity);
+        // typeOverride 只改类型：能力位存进风暴，阶段推进与强度覆盖时都会再次钳制
+        storm.capabilityType = effectiveType;
+        storm.applyCapabilities(resolvedType);
         spec.velocity().ifPresent(velocity -> {
             storm.velocityX = velocity[0];
             storm.velocityZ = velocity[1];
@@ -694,19 +742,21 @@ public final class StormManager {
     public static void setAllFromVanilla(ServerLevel level, boolean raining, boolean thundering, int duration) {
         if (!raining) {
             // 移动模式下的 /weather clear：清空该维度全部风暴（自然 + 手动），只广播一次（设计 §8）
-            removeWhere(level, snapshot -> true, StormRemoveEvent.Reason.CLEARED, true);
+            clearAllStorms(level);
             return;
         }
         ResourceLocation typeId = thundering ? WeatherTypes.THUNDER_ID : WeatherTypes.RAIN_ID;
         boolean surfaceVisible = allowsManualStorms(level);
-        // 无天光/有天花板维度优先用 BAND/COLUMN 档案；没有可用档案才提示并放弃
-        ResourceLocation profileId = findProfileId(level, typeId, !surfaceVisible);
-        if (profileId == null) {
-            if (!surfaceVisible) {
-                Component message = Component.translatable("commands.localizedrain.storm.no_skylight_blocked");
-                for (ServerPlayer player : level.players()) {
-                    player.sendSystemMessage(message);
-                }
+        // 匹配任意阶段：thunderstorm 的 thunder 在 stage 1，只比对 stage 0 会让 /weather thunder 静默失效
+        ProfileMatch match = findProfile(level, typeId, !surfaceVisible);
+        if (match == null) {
+            String key = !surfaceVisible
+                    ? (thundering ? "commands.localizedrain.storm.thunder_unavailable"
+                    : "commands.localizedrain.storm.no_skylight_blocked")
+                    : "commands.localizedrain.storm.no_profile";
+            Component message = Component.translatable(key);
+            for (ServerPlayer player : level.players()) {
+                player.sendSystemMessage(message);
             }
             return;
         }
@@ -715,7 +765,7 @@ public final class StormManager {
         int players = level.players().size();
         int spawned = 0;
         for (ServerPlayer player : level.players()) {
-            if (spawnManual(level, player.blockPosition(), typeId, profileId, radius,
+            if (spawnManual(level, player.blockPosition(), typeId, match, radius,
                     duration <= 0 ? -1 : duration) != null) {
                 spawned++;
             }
@@ -733,16 +783,16 @@ public final class StormManager {
     /** 在指定位置生成单阶段手动风暴（setWeatherAt / 原版 /weather 共用）。 */
     public static StormSnapshot spawnManual(ServerLevel level, BlockPos pos, ResourceLocation typeId,
                                             int radius, int durationTicks) {
-        ResourceLocation profileId = findProfileId(level, typeId, !allowsManualStorms(level));
-        if (profileId == null) {
+        ProfileMatch match = findProfile(level, typeId, !allowsManualStorms(level));
+        if (match == null) {
             return null;
         }
-        return spawnManual(level, pos, typeId, profileId, radius, durationTicks);
+        return spawnManual(level, pos, typeId, match, radius, durationTicks);
     }
 
     /** 与公开重载相同，但由调用方指定档案；无天光维度会传入 BAND/COLUMN 档案。 */
     private static StormSnapshot spawnManual(ServerLevel level, BlockPos pos, ResourceLocation typeId,
-                                             ResourceLocation profileId, int radius, int durationTicks) {
+                                             ProfileMatch match, int radius, int durationTicks) {
         if (WeatherTypes.CLEAR_ID.equals(typeId)) {
             // clear 的语义是「把覆盖该位置的风暴清掉」，而不是生成一个晴天风暴
             removeWhere(level, snapshot -> snapshot.covers(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D));
@@ -760,7 +810,8 @@ public final class StormManager {
         int replaced = removeWhere(level, snapshot -> snapshot.manual()
                 && snapshot.weatherType().equals(typeId)
                 && snapshot.covers(px, py, pz), StormRemoveEvent.Reason.MANUAL, false);
-        StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, Vec3.atCenterOf(pos))
+        StormSpawnSpec.Builder builder = StormSpawnSpec.builder(match.id(), Vec3.atCenterOf(pos))
+                .stage(match.stageIndex())
                 .typeOverride(typeId)
                 .velocity(0.0D, 0.0D)       // 指令/API 定位的风暴默认固定，不被风场吹走
                 .manual(true);
@@ -777,38 +828,69 @@ public final class StormManager {
         return snapshot;
     }
 
+    /** 档案 + 匹配的起始阶段（例如 thunderstorm 的 thunder 在 stage 1）。 */
+    private record ProfileMatch(ResourceLocation id, int stageIndex, int weight) {
+    }
+
     /**
-     * 按天气类型挑一个匹配档案：
+     * 按天气类型挑一个匹配档案（匹配任意阶段，而不是只看 stage 0）：
      * <ul>
-     *   <li>有天空的维度：只接受 {@code natural = true} 且竖直模式为 SURFACE 的档案
-     *       （否则 {@code /weather rain} 可能选中 cave_rain，得到一个 48–96 格的地下带）；</li>
-     *   <li>无天光 / 有天花板的维度：只接受 BAND/COLUMN 档案；</li>
-     *   <li>候选按 id 排序后取 weight 最大者，避免注册表顺序导致结果不可复现。</li>
+     *   <li>有天空的维度：优先 {@code natural = true} 且 SURFACE 的档案；没有自然档案时回退到
+     *       非自然 SURFACE，避免数据包把所有档案设为 natural=false 后 /weather rain 静默失效；</li>
+     *   <li>无天光 / 有天花板的维度：只接受 BAND/COLUMN 档案（不受 natural 限制，
+     *       cave_rain 本身就是 natural=false 的手动档案）；</li>
+     *   <li>候选按 id 排序后按 weight 加权随机：手动指令也会出现不同强度的天气，而不是恒取最重档案。</li>
      * </ul>
      */
-    private static ResourceLocation findProfileId(ServerLevel level, ResourceLocation typeId, boolean nonSurface) {
+    private static ProfileMatch findProfile(ServerLevel level, ResourceLocation typeId, boolean nonSurface) {
         List<ResourceLocation> ids = new ArrayList<>(StormProfiles.ids(level));
         ids.sort(Comparator.comparing(ResourceLocation::toString));
-        ResourceLocation best = null;
-        int bestWeight = -1;
+        List<ProfileMatch> natural = new ArrayList<>();
+        List<ProfileMatch> fallback = new ArrayList<>();
         for (ResourceLocation id : ids) {
             StormProfile profile = profile(level, id);
-            if (profile == null || !profile.stage(0).type().equals(typeId)) {
+            if (profile == null) {
                 continue;
             }
-            if (nonSurface) {
-                if (profile.vertical() == StormProfile.VerticalMode.SURFACE) {
-                    continue;
+            int stageIndex = -1;
+            for (int index = 0; index < profile.stages().size(); index++) {
+                if (profile.stage(index).type().equals(typeId)) {
+                    stageIndex = index;
+                    break;
                 }
-            } else if (profile.vertical() != StormProfile.VerticalMode.SURFACE || !profile.natural()) {
+            }
+            if (stageIndex < 0) {
                 continue;
             }
-            if (profile.weight() > bestWeight) {
-                bestWeight = profile.weight();
-                best = id;
+            ProfileMatch match = new ProfileMatch(id, stageIndex, Math.max(1, profile.weight()));
+            if (nonSurface) {
+                if (profile.vertical() != StormProfile.VerticalMode.SURFACE) {
+                    natural.add(match);
+                }
+            } else if (profile.vertical() == StormProfile.VerticalMode.SURFACE) {
+                if (profile.natural()) {
+                    natural.add(match);
+                } else {
+                    fallback.add(match);
+                }
             }
         }
-        return best;
+        List<ProfileMatch> pool = natural.isEmpty() ? fallback : natural;
+        if (pool.isEmpty()) {
+            return null;
+        }
+        int total = 0;
+        for (ProfileMatch match : pool) {
+            total += match.weight();
+        }
+        int roll = level.getRandom().nextInt(total);
+        for (ProfileMatch match : pool) {
+            roll -= match.weight();
+            if (roll < 0) {
+                return match;
+            }
+        }
+        return pool.get(pool.size() - 1);
     }
 
     /**

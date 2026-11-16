@@ -175,10 +175,12 @@ public final class ConfigFiles {
         }
         String legacyMode = legacyValues.get("weatherMode");
         if (legacyMode == null) {
+            markWeatherModeMigrated(marker, "none"); // 旧文件没有该键：标记一次，避免每次启动重复读文件
             return 0;
         }
         Path weather = directory.resolve("weather.toml");
         if (Files.notExists(weather)) {
+            // 存档还没有副本：不写标记，等下次启动副本生成后再迁移
             return 0;
         }
         try {

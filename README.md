@@ -207,7 +207,7 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-21.0.6.7-hotspot'
 .\gradlew.bat clean build --offline --console=plain
 ```
 
-产物：`build/libs/localizedrain-1.0.0-alpha.jar`。
+产物：`build/libs/localizedrain-<版本号>.jar`。
 
 ## 许可
 

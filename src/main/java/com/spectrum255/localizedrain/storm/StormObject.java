@@ -3,6 +3,7 @@ package com.spectrum255.localizedrain.storm;
 import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSnapshot;
+import com.spectrum255.localizedrain.api.WeatherType;
 import java.util.UUID;
 import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
@@ -44,6 +45,10 @@ final class StormObject {
     /** API/命令显式覆盖的强度；非 null 时压过阶段插值结果。 */
     Float rainOverride;
     Float thunderOverride;
+    /** 当前生效天气类型对应 id；由 StormManager 在类型变化时刷新能力位。 */
+    ResourceLocation capabilityType;
+    boolean precipitationCapability = true;
+    boolean thunderCapability = true;
     boolean manual;
     boolean dying;
     int dyingTicksLeft;
@@ -135,11 +140,29 @@ final class StormObject {
 
     /** 未乘淡出系数的强度：同步给客户端后由客户端按剩余淡出 tick 自行平滑。 */
     public float baseRain() {
-        return this.rainOverride != null ? this.rainOverride : this.rainIntensity;
+        float value = this.rainOverride != null ? this.rainOverride : this.rainIntensity;
+        return this.precipitationCapability ? value : 0.0F;
     }
 
     public float baseThunder() {
-        return this.thunderOverride != null ? this.thunderOverride : this.thunderIntensity;
+        float value = this.thunderOverride != null ? this.thunderOverride : this.thunderIntensity;
+        return this.thunderCapability ? value : 0.0F;
+    }
+
+    /** 按天气类型的能力位统一钳制强度；类型变化、阶段切换、读档后都走这里。 */
+    void applyCapabilities(WeatherType type) {
+        this.precipitationCapability = type == null || type.hasPrecipitation();
+        this.thunderCapability = type == null || type.allowsThunder();
+        clampIntensities();
+    }
+
+    private void clampIntensities() {
+        if (!this.precipitationCapability) {
+            this.rainIntensity = 0.0F;
+        }
+        if (!this.thunderCapability) {
+            this.thunderIntensity = 0.0F;
+        }
     }
 
     public float effectiveRain() {
@@ -181,6 +204,7 @@ final class StormObject {
                 ? 1.0D : 1.0D - Math.max(0.0D, this.stageTicksLeft) / this.stageTicksTotal;
         this.rainIntensity = stage.rain().lerp((float) progress);
         this.thunderIntensity = stage.thunder().lerp((float) progress);
+        clampIntensities();
 
         this.stageTicksLeft -= speedFactor;
         if (this.stageTicksLeft > 0.0D) {
@@ -209,6 +233,7 @@ final class StormObject {
         // 强度覆盖只对当前阶段有效，切阶段后回到档案定义
         this.rainOverride = null;
         this.thunderOverride = null;
+        clampIntensities();
     }
 
     void startDying() {

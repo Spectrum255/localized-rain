@@ -188,6 +188,9 @@ public final class LocalizedWeatherCommand {
     private static int applyCurrent(CommandContext<CommandSourceStack> context, ResourceLocation typeId, int duration) {
         ServerLevel level = context.getSource().getLevel();
         BlockPos pos = BlockPos.containing(context.getSource().getPosition());
+        if (WeatherManager.mobileMode()) {
+            return applyMobileAt(context, typeId, duration, pos, 0.0D);
+        }
         String patch = WeatherManager.patchAt(level, pos);
         if (patch == null) {
             context.getSource().sendFailure(Component.translatable("commands.localizedrain.weather.outside"));
@@ -199,6 +202,9 @@ public final class LocalizedWeatherCommand {
     private static int applyAt(CommandContext<CommandSourceStack> context, ResourceLocation typeId, int duration) {
         ServerLevel level = context.getSource().getLevel();
         BlockPos pos = BlockPosArgument.getBlockPos(context, "pos");
+        if (WeatherManager.mobileMode()) {
+            return applyMobileAt(context, typeId, duration, pos, 0.0D);
+        }
         String patch = WeatherManager.patchAt(level, pos);
         if (patch == null) {
             context.getSource().sendFailure(Component.translatable("commands.localizedrain.weather.outside"));
@@ -212,6 +218,16 @@ public final class LocalizedWeatherCommand {
         ServerLevel level = context.getSource().getLevel();
         BlockPos from = BlockPosArgument.getBlockPos(context, "from");
         BlockPos to = BlockPosArgument.getBlockPos(context, "to");
+        if (WeatherManager.mobileMode()) {
+            BlockPos center = BlockPos.containing(
+                    (from.getX() + to.getX()) / 2.0D,
+                    (from.getY() + to.getY()) / 2.0D,
+                    (from.getZ() + to.getZ()) / 2.0D);
+            double dx = from.getX() - to.getX();
+            double dz = from.getZ() - to.getZ();
+            double radius = Math.max(16.0D, Math.sqrt(dx * dx + dz * dz) / 2.0D);
+            return applyMobileAt(context, typeId, duration, center, radius);
+        }
         // 片采样格是 quart（4 方块）；AREA_STEP=32 个 quart = 128 方块，与旧版物理步长一致
         int minCellX = QuartPos.fromBlock(Math.min(from.getX(), to.getX()));
         int maxCellX = QuartPos.fromBlock(Math.max(from.getX(), to.getX()));
@@ -242,7 +258,93 @@ public final class LocalizedWeatherCommand {
 
     private static int applyGlobal(CommandContext<CommandSourceStack> context, ResourceLocation typeId, int duration) {
         ServerLevel level = context.getSource().getLevel();
+        if (WeatherManager.mobileMode()) {
+            return applyMobileGlobal(context, typeId, duration);
+        }
         return apply(context.getSource(), level, WeatherManager.allPatches(level), typeId, duration);
+    }
+
+    /** 移动模式的单点设置：生成一个覆盖该位置的手动风暴，或清除覆盖该位置的风暴。 */
+    private static int applyMobileAt(CommandContext<CommandSourceStack> context, ResourceLocation typeId,
+                                     int duration, BlockPos pos, double radius) {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        // 与片模式一致：任何强制天气（含强制晴天）所在位置都跳过手动设置
+        if (WeatherBiomeFilter.forcedTypeAt(level, pos) != null) {
+            source.sendFailure(Component.translatable("commands.localizedrain.weather.biome_excluded", 1));
+            return 0;
+        }
+        int count;
+        if (WeatherTypes.CLEAR_ID.equals(typeId)) {
+            // clear 按「列」判断覆盖关系：玩家在高空清除地表风暴也应生效
+            count = StormManager.clearAtColumn(level, pos, radius);
+        } else {
+            int stormRadius = radius > 0.0D ? (int) Math.round(Math.min(radius, 4096.0D)) : 0;
+            StormSnapshot snapshot = StormManager.spawnManual(level, pos, typeId, stormRadius, duration);
+            count = snapshot == null ? 0 : 1;
+        }
+        if (count == 0 && !WeatherTypes.CLEAR_ID.equals(typeId)) {
+            source.sendFailure(Component.translatable("commands.localizedrain.storm.spawn_failed", typeId.toString()));
+            return 0;
+        }
+        int finalCount = count;
+        Component message = mobileSuccessMessage(typeId, finalCount);
+        if (radius > 0.0D && !WeatherTypes.CLEAR_ID.equals(typeId)) {
+            // 区域生成用圆形风暴近似，矩形四角可能落在圆外
+            message = message.copy().append(Component.literal(" ")).append(
+                    Component.translatable("commands.localizedrain.storm.area_hint"));
+        }
+        Component finalMessage = message;
+        source.sendSuccess(() -> finalMessage, true);
+        return count;
+    }
+
+    /** 移动模式的 global：每位玩家生成一个（或清空维度全部风暴），与 /weather rain|clear 的原版语义一致。 */
+    private static int applyMobileGlobal(CommandContext<CommandSourceStack> context, ResourceLocation typeId, int duration) {
+        CommandSourceStack source = context.getSource();
+        ServerLevel level = source.getLevel();
+        if (WeatherTypes.CLEAR_ID.equals(typeId)) {
+            int removed = StormManager.clearAllStorms(level);
+            source.sendSuccess(() -> mobileSuccessMessage(WeatherTypes.CLEAR_ID, removed), true);
+            return removed;
+        }
+        int players = level.players().size();
+        int spawned = 0;
+        int skipped = 0;
+        for (ServerPlayer player : level.players()) {
+            if (WeatherBiomeFilter.forcedTypeAt(level, player.blockPosition()) != null) {
+                skipped++;
+                continue;
+            }
+            if (StormManager.spawnManual(level, player.blockPosition(), typeId, 0, duration) != null) {
+                spawned++;
+            }
+        }
+        if (spawned == 0) {
+            if (skipped > 0) {
+                // 全部候选位置都在强制天气范围内：这不是生成失败
+                int locked = skipped;
+                source.sendFailure(Component.translatable(
+                        "commands.localizedrain.weather.biome_excluded", locked));
+            } else {
+                source.sendFailure(Component.translatable(
+                        "commands.localizedrain.storm.spawn_failed", typeId.toString()));
+            }
+            return 0;
+        }
+        int candidates = players - skipped;
+        Component message = mobileSuccessMessage(typeId, spawned);
+        if (spawned < candidates) {
+            message = message.copy().append(Component.literal(" ")).append(
+                    Component.translatable("commands.localizedrain.storm.partial_spawned", spawned, candidates));
+        }
+        if (skipped > 0) {
+            message = message.copy().append(Component.literal(" ")).append(
+                    Component.translatable("commands.localizedrain.weather.biome_skipped", skipped));
+        }
+        Component finalMessage = message;
+        source.sendSuccess(() -> finalMessage, true);
+        return spawned;
     }
 
     private static int apply(CommandSourceStack source, ServerLevel level, Set<String> patches,
@@ -279,6 +381,20 @@ public final class LocalizedWeatherCommand {
             return Component.translatable("commands.localizedrain.weather.set.thunder", count);
         }
         return Component.translatable("commands.localizedrain.weather.set.type", typeId.toString(), count);
+    }
+
+    /** 移动模式的成功文案：计数单位是风暴，不是片。 */
+    private static Component mobileSuccessMessage(ResourceLocation typeId, int count) {
+        if (WeatherTypes.CLEAR_ID.equals(typeId)) {
+            return Component.translatable("commands.localizedrain.storm.set.clear", count);
+        }
+        if (WeatherTypes.RAIN_ID.equals(typeId)) {
+            return Component.translatable("commands.localizedrain.storm.set.rain", count);
+        }
+        if (WeatherTypes.THUNDER_ID.equals(typeId)) {
+            return Component.translatable("commands.localizedrain.storm.set.thunder", count);
+        }
+        return Component.translatable("commands.localizedrain.storm.set.type", count, typeId.toString());
     }
 
     private static int duration(CommandContext<CommandSourceStack> context) {
