@@ -1,7 +1,5 @@
 package com.spectrum255.localizedrain.client;
 
-import com.spectrum255.localizedrain.Localizedrain;
-import com.spectrum255.localizedrain.api.WeatherMode;
 import com.spectrum255.localizedrain.network.StormSyncPayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -13,7 +11,6 @@ public final class ClientStormWeather {
     private static final float LEVEL_STEP = 0.01F;
     private static float currentRain;
     private static float currentThunder;
-    private static boolean warnedModeMismatch;
 
     private ClientStormWeather() {}
 
@@ -23,19 +20,11 @@ public final class ClientStormWeather {
         if (level == null || player == null) {
             return;
         }
-        if (!ClientStormCache.hasEverReceived()) {
-            // 从未收到风暴快照：服务端不在移动模式，交还它的逐玩家雨量包驱动
+        if (!ClientStormCache.hasEverReceived() || !ClientStormCache.active()) {
+            // 从未收到快照，或服务端已不在移动模式：交还逐玩家雨量包驱动，保持原版/片模式渲染
             currentRain = 0.0F;
             currentThunder = 0.0F;
             return;
-        }
-        WeatherMode mode = WeatherMode.current();
-        if (mode != WeatherMode.MOBILE && !warnedModeMismatch) {
-            // 服务端在发风暴快照就说明它在移动模式；本地配置可能没同步，以服务端为准
-            warnedModeMismatch = true;
-            Localizedrain.LOGGER.warn(
-                    "[localizedrain] server is sending mobile storms but local weatherMode is {}; following the server",
-                    mode.getSerializedName());
         }
         double falloffRatio = ClientStormCache.falloffRatio();
         boolean isolated = level.getBiome(player.blockPosition()).is(

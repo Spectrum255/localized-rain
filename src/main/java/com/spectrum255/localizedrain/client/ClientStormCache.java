@@ -13,6 +13,8 @@ public final class ClientStormCache {
     private static final Map<UUID, Storm> STORMS = new HashMap<>();
     /** 是否收到过至少一次风暴快照；用于判断服务端是否处于移动模式，而不是依赖本地配置。 */
     private static boolean everReceived;
+    /** 服务端当前是否由风暴系统接管天气（由服务端随快照下发，切换模式后立即失效）。 */
+    private static boolean active;
     /** 服务端配置（随快照下发）：隔离群系天气与强度衰减带宽度。 */
     private static String isolatedMode = "clear";
     private static double falloffRatio = 0.3D;
@@ -74,8 +76,14 @@ public final class ClientStormCache {
     /** 全量替换，同时把位置向权威值靠拢（不硬跳，避免 40 tick 一次的抖动）。 */
     public static void accept(StormSyncPayload payload) {
         everReceived = true;
+        active = payload.active();
         isolatedMode = payload.isolatedMode();
         falloffRatio = payload.falloffRatio();
+        if (!active) {
+            // 服务端不在移动模式：不留旧风暴，避免切回 patches 后仍按缓存写雨量
+            STORMS.clear();
+            return;
+        }
         Map<UUID, Storm> next = new HashMap<>();
         for (StormSyncPayload.StormEntry entry : payload.storms()) {
             Storm existing = STORMS.get(entry.id());
@@ -108,12 +116,18 @@ public final class ClientStormCache {
     public static void clear() {
         STORMS.clear();
         everReceived = false;
+        active = false;
         isolatedMode = "clear";
         falloffRatio = 0.3D;
     }
 
     public static boolean hasEverReceived() {
         return everReceived;
+    }
+
+    /** 服务端是否处于移动模式（快照里的 active 标志）。 */
+    public static boolean active() {
+        return active;
     }
 
     public static String isolatedMode() {

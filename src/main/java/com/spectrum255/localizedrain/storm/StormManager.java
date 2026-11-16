@@ -112,6 +112,13 @@ public final class StormManager {
         syncSink.sendTo(player, syncData(player.serverLevel()));
     }
 
+    /** 天气模式变化后立刻向所有维度重推一次，让客户端知道风暴系统是否仍接管天气。 */
+    public static void refreshAll(net.minecraft.server.MinecraftServer server) {
+        for (ServerLevel level : server.getAllLevels()) {
+            broadcast(level);
+        }
+    }
+
     /** 玩家退出时清掉 HUD 缓存，重连后能重新收到完整状态。 */
     public static void forget(UUID playerId) {
         LAST_HUD.remove(playerId);
@@ -134,7 +141,9 @@ public final class StormManager {
         }
         return new StormSyncData(entries,
                 WindField.stringConfig(Config.ISOLATED_BIOME_WEATHER, "clear"),
-                WindField.doubleConfig(Config.STORM_FALLOFF_RATIO, 0.3D));
+                WindField.doubleConfig(Config.STORM_FALLOFF_RATIO, 0.3D),
+                com.spectrum255.localizedrain.api.WeatherMode.current()
+                        == com.spectrum255.localizedrain.api.WeatherMode.MOBILE);
     }
 
     public static StormProfile profile(ServerLevel level, net.minecraft.resources.ResourceLocation profileId) {
@@ -419,9 +428,26 @@ public final class StormManager {
         }
         data(level).storms().add(storm);
         data(level).setDirty();
+        if (logStormSpawns()) {
+            Localizedrain.LOGGER.info(
+                    "[localizedrain] storm spawned dim={} id={} profile={} x={} z={} radius={} vertical={} minY={} maxY={} stage={}/{} type={} rain={} thunder={} velocity={},{} manual={} lifetimeTicks={} stageTicks={}",
+                    level.dimension().location(), storm.id, spec.profileId(), storm.x, storm.z, storm.radius,
+                    vertical, storm.minY, storm.maxY, storm.stageIndex, profile.stages().size(),
+                    storm.weatherType(profile), storm.baseRain(), storm.baseThunder(),
+                    storm.velocityX, storm.velocityZ, storm.manual, storm.lifeTicksLeft, storm.stageTicksLeft);
+        }
         // 新风暴立即推送，客户端不必等下一次周期校正
         broadcast(level);
         return snapshot;
+    }
+
+    /** 调试开关：风暴生成时是否输出详细参数；配置未加载时默认开（本模组自身的诊断信息）。 */
+    private static boolean logStormSpawns() {
+        try {
+            return Config.LOG_STORM_SPAWNS.get();
+        } catch (IllegalStateException ignored) {
+            return true;
+        }
     }
 
     public static boolean remove(ServerLevel level, UUID id) {

@@ -1,7 +1,7 @@
 package com.spectrum255.localizedrain.weather;
 
 import com.mojang.logging.LogUtils;
-import com.spectrum255.localizedrain.Config;
+import com.spectrum255.localizedrain.FilterConfig;
 import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import java.util.ArrayList;
@@ -229,9 +229,9 @@ public final class WeatherBiomeFilter {
     }
 
     private static Snapshot build(ServerLevel level) {
-        List<TypeRule> whitelist = buildTypeRules(level, Config.BIOME_WEATHER_WHITELIST.get(),
+        List<TypeRule> whitelist = buildTypeRules(level, FilterConfig.BIOME_WEATHER_WHITELIST.get(),
                 "weatherBiomeWhitelist");
-        List<TypeRule> blacklist = buildTypeRules(level, Config.BIOME_WEATHER_BLACKLIST.get(),
+        List<TypeRule> blacklist = buildTypeRules(level, FilterConfig.BIOME_WEATHER_BLACKLIST.get(),
                 "weatherBiomeBlacklist");
         List<OverrideRule> overrides = buildOverrides(level);
         List<ResourceLocation> naturalPool = WeatherTypes.naturalIds(level);
@@ -274,7 +274,7 @@ public final class WeatherBiomeFilter {
     /** 解析强制天气：{@code selector=weather}，不支持天气标签，多条命中时按顺序取第一条。 */
     private static List<OverrideRule> buildOverrides(ServerLevel level) {
         List<OverrideRule> result = new ArrayList<>();
-        for (String raw : Config.BIOME_WEATHER_OVERRIDES.get()) {
+        for (String raw : FilterConfig.BIOME_WEATHER_OVERRIDES.get()) {
             String entry = raw == null ? "" : raw.trim();
             if (entry.isEmpty()) {
                 continue;

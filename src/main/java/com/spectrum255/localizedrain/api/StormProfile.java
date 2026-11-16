@@ -3,6 +3,8 @@ package com.spectrum255.localizedrain.api;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
+import com.spectrum255.localizedrain.Localizedrain;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import net.minecraft.resources.ResourceLocation;
@@ -77,30 +79,60 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
                     .forGetter(StormProfile::environment)
     ).apply(instance, StormProfile::new));
 
-    /** 非法档案返回 DataResult.error：数据包加载器会记错误并跳过该档案，服务器继续启动。 */
-    public static final Codec<StormProfile> CODEC = RECORD_CODEC.flatXmap(StormProfile::validate, DataResult::success);
+    /**
+     * 读档时把越界数值修正到可用范围，而不是报错：
+     * 数据包加载器对 codec error 会中止整个世界加载（不是跳过单个档案）。区间允许 min &gt; max，
+     * 表示该阶段内数值从 min 递减到 max（强度渐变、半径收缩）。只有「没有任何阶段」才报错。
+     */
+    public static final Codec<StormProfile> CODEC = RECORD_CODEC.flatXmap(StormProfile::sanitize, DataResult::success);
 
-    private static DataResult<StormProfile> validate(StormProfile profile) {
+    private static DataResult<StormProfile> sanitize(StormProfile profile) {
         if (profile.stages().isEmpty()) {
-            return DataResult.error(() -> "stages must contain at least one entry");
+            return DataResult.error(() -> "storm profile must contain at least one stage");
         }
-        if (profile.radius().min() <= 0 || profile.radius().max() < profile.radius().min()) {
-            return DataResult.error(() -> "radius must satisfy 0 < min <= max");
-        }
-        if (profile.weight() < 1) {
-            return DataResult.error(() -> "weight must be >= 1");
-        }
+        boolean changed = false;
+        List<Stage> stages = new ArrayList<>(profile.stages().size());
         for (Stage stage : profile.stages()) {
-            if (stage.minTicks() <= 0 || stage.maxTicks() < stage.minTicks()) {
-                return DataResult.error(() -> "stage " + stage.type() + " must satisfy 0 < min_ticks <= max_ticks");
-            }
-            for (Range range : List.of(stage.rain(), stage.thunder(), stage.radiusScale())) {
-                if (range.min() < 0 || range.max() < range.min()) {
-                    return DataResult.error(() -> "range of stage " + stage.type() + " must satisfy 0 <= min <= max");
-                }
+            int minTicks = Math.max(1, stage.minTicks());
+            int maxTicks = Math.max(minTicks, stage.maxTicks());
+            Range rain = clamp(stage.rain(), 0.0D, 1.0D);
+            Range thunder = clamp(stage.thunder(), 0.0D, 1.0D);
+            Range scale = clamp(stage.radiusScale(), 0.0D, 4.0D);
+            Optional<Float> advance = stage.advanceWhenMoisture().map(value -> clamp01(value));
+            Optional<Float> die = stage.dieWhenMoisture().map(value -> clamp01(value));
+            if (minTicks != stage.minTicks() || maxTicks != stage.maxTicks()
+                    || !rain.equals(stage.rain()) || !thunder.equals(stage.thunder())
+                    || !scale.equals(stage.radiusScale())
+                    || !advance.equals(stage.advanceWhenMoisture()) || !die.equals(stage.dieWhenMoisture())) {
+                changed = true;
+                stages.add(new Stage(stage.type(), minTicks, maxTicks, rain, thunder, scale, advance, die));
+            } else {
+                stages.add(stage);
             }
         }
-        return DataResult.success(profile);
+        double minRadius = Math.max(1.0D, profile.radius().min());
+        double maxRadius = Math.max(minRadius, profile.radius().max());
+        int weight = Math.max(1, profile.weight());
+        double speed = Math.max(0.01D, profile.speedMultiplier());
+        StormProfile result = new StormProfile(weight, profile.natural(), speed,
+                new Range(minRadius, maxRadius), profile.vertical(), List.copyOf(stages), profile.environment());
+        if (!result.equals(profile)) {
+            Localizedrain.LOGGER.warn(
+                    "[localizedrain] storm profile values were clamped to a valid range; check its JSON (stages={}, radius=[{}, {}])",
+                    stages.size(), minRadius, maxRadius);
+        }
+        return DataResult.success(result);
+    }
+
+    /** 两个端点各自夹到 [low, high]，保留顺序（min &gt; max 表示递减）。 */
+    private static Range clamp(Range range, double low, double high) {
+        double min = Math.max(low, Math.min(high, range.min()));
+        double max = Math.max(low, Math.min(high, range.max()));
+        return new Range(min, max);
+    }
+
+    private static float clamp01(float value) {
+        return Math.max(0.0F, Math.min(1.0F, value));
     }
 
     /** 取指定阶段的强度区间；索引越界时钳到末阶段。 */

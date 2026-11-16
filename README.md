@@ -39,6 +39,8 @@ Minecraft 原版的天气总是随机触发且全局生效的，这不合理。�
 - 风暴档案是数据包注册表 `localizedrain:storm_profile`。内置五个风暴档案：
   `drizzle` / `shower` / `squall` / `thunderstorm`（自然，`surface`）与
   `cave_rain`（`band`，非自然，供无天空光照/有天花板的维度使用）。
+  自定义档案放在 `data/<数据包命名空间>/localizedrain/storm_profile/<id>.json`：NeoForge 把注册表的命名空间
+  也作为目录前缀，所以路径里会出现两次 `localizedrain`；文件的命名空间就是档案 id 的命名空间。
 - 这些参数分别描述生成权重、是否自然生成、移动速度倍率、半径、竖直模式（`SURFACE` / `BAND` / `COLUMN`），
   以及阶段类型、雨/雷强度、阶段时长与环境演化参数。
 - 每个维度有一套风场，风场方向每隔 `windChangeIntervalTicks` 做一次有界随机浮动。
@@ -104,7 +106,17 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 ## 配置
 
-配置文件：`config/localizedrain-common.toml`。以下为主要配置项（默认值）。
+配置文件分为全局与存档两级：
+
+| 文件 | 位置 | 内容 |
+| --- | --- | --- |
+| `common.toml` | `config/localizedrain/`（全局） | 调试开关（`debugLogging` / `logWeatherChanges` / `logStormSpawns`），所有存档共用 |
+| `weather.toml` | 全局：`config/localizedrain/weather.toml`（新存档默认值）；存档：`<存档>/serverconfig/localizedrain/weather.toml` | 天气模式、天气模拟区间、移动风暴参数；每个存档独立 |
+| `filters.toml` | 全局：`config/localizedrain/filters.toml`（新存档默认值）；存档：`<存档>/serverconfig/localizedrain/filters.toml` | 天气过滤器（群系=天气），三项列表直接位于文件根级；每个存档独立 |
+
+每个存档首次启动时，模组会把全局 `config/localizedrain/weather.toml` 与 `filters.toml` 自动复制为该存档的 `<存档>/serverconfig/localizedrain/` 下的独立副本（已存在则不覆盖）；之后的修改互不影响。改动已存在的存档请编辑该存档下的文件。旧版 `config/localizedrain-common.toml` 首次启动会复制为 `config/localizedrain/common.toml`（旧文件保留作备份），其中天气键需迁移到 `weather.toml`。
+
+以下为主要配置项（默认值）。
 
 ### 通用与片模式
 
@@ -117,7 +129,9 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `maxStoredStates`                | `4096`    | 存档中片状态上限                               |
 | `maxParentEntries`               | `16384`   | 并查集父表硬上限                               |
 | `maxColumnScansPerTick`          | `4`       | 每 tick 最多新扫描的列数                        |
-| `debugLogging`                   | `false`   | 输出调试日志                                 |
+| `debugLogging`                   | `false`   | 输出片扫描/合并的调试日志                                 |
+| `logWeatherChanges`              | `false`   | 群系片天气变化时输出位置与类型                           |
+| `logStormSpawns`                 | `true`    | 风暴生成时输出详细参数                                |
 
 ### 天气节奏（tick）
 
@@ -170,6 +184,22 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 - 地下 `BAND` / `COLUMN` 风暴只下雨、不落雷（落雷要求落点正上方有开口 `canSeeSky`）；
   无天光/带天花板维度里的非 `SURFACE` 雷暴会被直接拒绝。
 - 服务器停止/换存档会清空风暴静态缓存；配置重载会复位一次性警告。
+
+## 调试日志
+
+- `debugLogging`（默认关闭）开启后，天气模拟会输出 `[LRDBG]` 前缀的片扫描与并查集合并细节。
+- `logWeatherChanges`（默认关闭）开启后，任何群系片天气发生变化（类型 / 是否下雨 / 是否打雷）会输出一行：
+
+  ```
+  [LRDBG] weather change dim=minecraft:overworld pos=8,64,8 patch=p3:0,4,0 biome=minecraft:plains type=localizedrain:rain raining=true thundering=false rain=0.42 thunder=0.00 previous=localizedrain:clear|false|false
+  ```
+
+  `pos` 是片中心（水平按 16 方块量化），`patch` 是内部片标识，`previous` 是上一次的 `类型|下雨|打雷`。
+- `logStormSpawns`（默认开启）控制风暴生成时的详细参数日志（维度、id、档案、坐标、半径、竖直区间、阶段、类型、强度、速度、是否手动、寿命）：
+
+  ```
+  [localizedrain] storm spawned dim=minecraft:overworld id=... profile=localizedrain:thunderstorm x=120.5 z=-88.0 radius=269.0 vertical=SURFACE minY=48.0 maxY=320.0 stage=0/3 type=localizedrain:rain rain=0.52 thunder=0.0 velocity=0.0,0.0 manual=true lifetimeTicks=-1 stageTicks=5400.0
+  ```
 
 ## 构建
 

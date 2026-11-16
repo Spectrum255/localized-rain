@@ -34,6 +34,10 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 
 public final class WeatherManager {
+    /** debugLogging 开启时记录每个片上次的天气签名（type|raining|thundering），只输出变化。 */
+    private static final Map<String, String> WEATHER_LOG_SIGNATURES = new HashMap<>();
+    private static final Set<String> WEATHER_LOG_PATCHES = new HashSet<>();
+
     /** 原版 tickChunk 里雷击抽签的上限值，1/100000 每区块每 tick。 */
     public static final int LIGHTNING_ROLL_BASE = 100_000;
     /** 每个 tick 让客户端显示的雨量/雷量向目标靠近的步长，和原版的 0.01/tick 一致。 */
@@ -70,10 +74,19 @@ public final class WeatherManager {
     /** 本 sweep 中被指令/API 手动覆盖的片：只走手动计时器，不参与自然分类。 */
     private static final Set<String> SWEEP_MANUAL = new HashSet<>();
 
+    /** 上一 tick 的天气模式；用于检测运行期切换并通知客户端。 */
+    private static WeatherMode lastMode;
+
     private WeatherManager() {}
 
     public static void tick(ServerLevel level) {
-        switch (WeatherMode.current()) {
+        WeatherMode mode = WeatherMode.current();
+        // 模式在运行期变化（配置重载）时立刻重推风暴快照：客户端据此停止/开始接管雨量
+        if (mode != lastMode) {
+            lastMode = mode;
+            StormManager.refreshAll(level.getServer());
+        }
+        switch (mode) {
             case PATCHES -> tickPatches(level);
             case MOBILE -> tickMobile(level);
             case VANILLA -> {
@@ -378,8 +391,80 @@ public final class WeatherManager {
             data.tickManual(random, manual, gameTime, ticks, cycleWeather);
         }
 
+        if (logWeatherChanges()) {
+            WEATHER_LOG_PATCHES.clear();
+            WEATHER_LOG_PATCHES.addAll(cycling);
+            WEATHER_LOG_PATCHES.addAll(held);
+            WEATHER_LOG_PATCHES.addAll(manual);
+            logWeatherChanges(level, data, WEATHER_LOG_PATCHES);
+        }
+
         // 不再把局部最大值写回维度级 rainLevel/thunderLevel：否则 Level#isRaining() 会让第三方逻辑全维度生效。
         // 客户端渲染仍由逐玩家发包驱动；第三方模组应改用 WeatherApi 的按位置查询。
+    }
+
+    private static boolean debugLogging() {
+        try {
+            return Config.DEBUG_LOGGING.get();
+        } catch (IllegalStateException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean logWeatherChanges() {
+        try {
+            return Config.LOG_WEATHER_CHANGES.get();
+        } catch (IllegalStateException ignored) {
+            return false;
+        }
+    }
+
+    /** 片 key {@code p3:<colX>,<colZ>,<segStartY>} → 片中心方块坐标；格式不符返回 null。 */
+    private static BlockPos patchCenter(String patch) {
+        if (patch == null || !patch.startsWith("p3:")) {
+            return null;
+        }
+        String[] parts = patch.substring(3).split(",");
+        if (parts.length != 3) {
+            return null;
+        }
+        try {
+            return new BlockPos(Integer.parseInt(parts[0]) * 16 + 8,
+                    Integer.parseInt(parts[1]), Integer.parseInt(parts[2]) * 16 + 8);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    /** debugLogging：任何片天气（类型 / 是否下雨 / 是否打雷）变化时输出位置、群系与类型。 */
+    private static void logWeatherChanges(ServerLevel level, WeatherData data, Set<String> patches) {
+        for (String patch : patches) {
+            WeatherData.WeatherState state = data.get(patch);
+            if (state == null) {
+                continue;
+            }
+            String signature = state.typeId() + "|" + state.isRaining() + "|" + state.isThundering();
+            String previous = WEATHER_LOG_SIGNATURES.put(patch, signature);
+            if (signature.equals(previous)) {
+                continue;
+            }
+            BlockPos pos = patchCenter(patch);
+            com.spectrum255.localizedrain.Localizedrain.LOGGER.info(
+                    "[LRDBG] weather change dim={} pos={} patch={} biome={} type={} raining={} thundering={} rain={} thunder={} previous={}",
+                    level.dimension().location(),
+                    pos == null ? "?" : pos.getX() + "," + pos.getY() + "," + pos.getZ(),
+                    patch,
+                    BiomePatches.patchBiome(level, patch),
+                    state.typeId(),
+                    state.isRaining(),
+                    state.isThundering(),
+                    state.rainLevel(),
+                    state.thunderLevel(),
+                    previous == null ? "none" : previous);
+        }
+        if (WEATHER_LOG_SIGNATURES.size() > 65536) {
+            WEATHER_LOG_SIGNATURES.clear();     // 极端情况下防止无界增长；下一轮会重新输出一次全量
+        }
     }
 
     private static void classify(ServerLevel level, WeatherData data, String patch, Set<String> cycling,

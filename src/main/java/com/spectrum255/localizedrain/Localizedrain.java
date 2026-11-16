@@ -3,6 +3,7 @@ package com.spectrum255.localizedrain;
 import com.mojang.logging.LogUtils;
 import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
+import com.spectrum255.localizedrain.api.WeatherMode;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.network.LocalizedrainNetwork;
 import com.spectrum255.localizedrain.network.StormSyncBroadcaster;
@@ -12,6 +13,9 @@ import com.spectrum255.localizedrain.storm.StormManager;
 import com.spectrum255.localizedrain.weather.LoadedChunks;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import com.spectrum255.localizedrain.weather.WeatherManager;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.UUID;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -20,6 +24,7 @@ import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.config.ModConfigEvent;
+import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
@@ -33,7 +38,31 @@ public final class Localizedrain {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public Localizedrain(IEventBus modEventBus, ModContainer modContainer) {
-        modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+        // 配置统一放在 config/localizedrain/ 下：common.toml 是调试开关，weather.toml 是天气/风暴参数，
+        // filters.toml 里用 whitelist / blacklist / overrides 三个 section 存放过滤器。
+        Path configDir = FMLPaths.CONFIGDIR.get().resolve("localizedrain");
+        try {
+            Files.createDirectories(configDir);
+        } catch (IOException exception) {
+            LOGGER.warn("[localizedrain] could not create config directory {}", configDir, exception);
+        }
+        // 旧版单文件配置：迁移到新目录（保留旧文件作为备份，不删除）
+        Path legacyCommon = FMLPaths.CONFIGDIR.get().resolve("localizedrain-common.toml");
+        Path commonFile = configDir.resolve("common.toml");
+        if (Files.notExists(commonFile) && Files.exists(legacyCommon)) {
+            try {
+                Files.copy(legacyCommon, commonFile);
+                LOGGER.info("[localizedrain] migrated legacy config {} to {}", legacyCommon, commonFile);
+            } catch (IOException exception) {
+                LOGGER.warn("[localizedrain] could not migrate legacy config {}", legacyCommon, exception);
+            }
+        }
+        // common.toml 是所有存档共用的调试开关；weather.toml / filters.toml 是 SERVER 配置，
+        // 每个存档在 <world>/serverconfig/localizedrain/ 下独立，
+        // config/localizedrain/ 里的同名文件则作为新建存档的默认值来源。
+        modContainer.registerConfig(ModConfig.Type.COMMON, Config.COMMON_SPEC, "localizedrain/common.toml");
+        modContainer.registerConfig(ModConfig.Type.SERVER, Config.WEATHER_SPEC, "localizedrain/weather.toml");
+        modContainer.registerConfig(ModConfig.Type.SERVER, FilterConfig.FILTERS_SPEC, "localizedrain/filters.toml");
         // 领域层不直接构造网络包：安装网络层实现
         StormManager.setSyncSink(new StormSyncBroadcaster());
         // 自定义注册表必须先创建，DeferredRegister 只会在 NewRegistryEvent 里注册已经创建好的表；
@@ -51,7 +80,10 @@ public final class Localizedrain {
         modEventBus.addListener((ModConfigEvent.Reloading event) -> invalidateWeatherCaches());
         NeoForge.EVENT_BUS.addListener((ServerStartedEvent event) -> {
             invalidateWeatherCaches();
+            LOGGER.info("[localizedrain] weather mode = {}", WeatherMode.current());
             StormProfiles.logLoaded(event.getServer());
+            // HEAD 注入时全局 weather.toml 可能还没生成（首次启动）；这里补一次，供下次启动使用
+            ConfigFiles.seedWorldConfigs(event.getServer());
         });
         // 服务器停止/换存档：清空风暴相关的静态缓存（LAST_HUD、LAST_SYNC、维度缓存等）
         NeoForge.EVENT_BUS.addListener((ServerStoppedEvent event) -> StormManager.resetCaches());

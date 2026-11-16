@@ -39,6 +39,9 @@ Weather is carried by **storms**: each storm is a horizontal circle plus a verti
 - Storm profiles live in the datapack registry `localizedrain:storm_profile`. Five profiles are built in:
   `drizzle` / `shower` / `squall` / `thunderstorm` (natural, `surface`) and
   `cave_rain` (`band`, non-natural, for dimensions without sky light or with a ceiling).
+  Custom profiles go to `data/<pack namespace>/localizedrain/storm_profile/<id>.json`: NeoForge prefixes the
+  directory with the registry namespace too, so the path contains `localizedrain` twice; the file's namespace
+  becomes the namespace of the profile id.
 - The parameters describe spawn weight, whether the profile spawns naturally, movement speed multiplier, radius, vertical mode (`SURFACE` / `BAND` / `COLUMN`), as well as stage types, rain/thunder intensity, stage durations and environmental evolution parameters.
 - Each dimension has its own wind field; the wind direction performs a bounded random walk every `windChangeIntervalTicks`.
 - Moisture and temperature decide how fast a storm advances, whether it enters the next stage early, or dies. Natural spawning obeys the weather filters: a biome that cannot produce a weather type never spawns that type of storm, but storms that already exist are unaffected when they drift over a filtered biome.
@@ -104,7 +107,17 @@ Whitelist/blacklist only constrain natural cycling; commands can still manually 
 
 ## Configuration
 
-Config file: `config/localizedrain-common.toml`. Main options (with defaults):
+Config files are split into global and per-save layers:
+
+| File | Location | Content |
+| --- | --- | --- |
+| `common.toml` | `config/localizedrain/` (global) | debug switches, shared by every save |
+| `weather.toml` | global defaults at `config/localizedrain/weather.toml`; each save uses `<save>/serverconfig/localizedrain/weather.toml` | weather mode, simulation timings, moving-storm settings; per save |
+| `filters.toml` | global defaults at `config/localizedrain/filters.toml`; each save uses `<save>/serverconfig/localizedrain/filters.toml` | weather filters (biome=weather), three root-level lists; per save |
+
+On first launch of each save the mod copies the global `config/localizedrain/weather.toml` and `filters.toml` to that save's `<save>/serverconfig/localizedrain/` (existing files are never overwritten); edits stay independent from then on. Edit the per-save files to change an existing world. The legacy `config/localizedrain-common.toml` is copied to `config/localizedrain/common.toml` on first launch (the old file is kept as a backup); its weather keys need to be moved to `weather.toml`.
+
+Main options (with defaults):
 
 ### General and patch mode
 
@@ -117,7 +130,9 @@ Config file: `config/localizedrain-common.toml`. Main options (with defaults):
 | `maxStoredStates`                | `4096`    | Maximum number of patch states in the save                |
 | `maxParentEntries`               | `16384`   | Hard cap for the union-find parent table                  |
 | `maxColumnScansPerTick`          | `4`       | Maximum number of newly scanned columns per tick          |
-| `debugLogging`                   | `false`   | Emit debug logging                                        |
+| `debugLogging`                   | `false`   | Emit patch scan / merge debug logging                      |
+| `logWeatherChanges`              | `false`   | Log biome patch weather changes with position and type    |
+| `logStormSpawns`                 | `true`    | Log detailed storm spawn parameters                       |
 
 ### Weather pacing (ticks)
 
@@ -166,6 +181,22 @@ Config file: `config/localizedrain-common.toml`. Main options (with defaults):
 - Natural storms only spawn in dimensions with sky light and no ceiling; `SURFACE` manual storms are rejected in dimensions without sky light, but `BAND` / `COLUMN` cave storms can still be created manually.
 - Underground `BAND` / `COLUMN` storms only rain, never strike lightning (lightning requires an opening directly above the strike point, `canSeeSky`); non-`SURFACE` thunderstorms in dimensions without sky light or with a ceiling are rejected outright.
 - Stopping the server or switching saves clears the storm static caches; reloading the config resets one-shot warnings.
+
+## Debug logging
+
+- With `debugLogging` enabled (off by default), the weather simulation prints `[LRDBG]` patch scan and union-find merge details.
+- With `logWeatherChanges` enabled (off by default), every biome patch weather change (type / raining / thundering) prints one line:
+
+  ```
+  [LRDBG] weather change dim=minecraft:overworld pos=8,64,8 patch=p3:0,4,0 biome=minecraft:plains type=localizedrain:rain raining=true thundering=false rain=0.42 thunder=0.00 previous=localizedrain:clear|false|false
+  ```
+
+  `pos` is the patch center (quantized to 16 blocks horizontally), `patch` is the internal patch id, and `previous` is the previous `type|raining|thundering`.
+- `logStormSpawns` (on by default) controls the detailed storm spawn log line (dimension, id, profile, position, radius, vertical range, stage, type, intensity, velocity, manual flag and lifetime):
+
+  ```
+  [localizedrain] storm spawned dim=minecraft:overworld id=... profile=localizedrain:thunderstorm x=120.5 z=-88.0 radius=269.0 vertical=SURFACE minY=48.0 maxY=320.0 stage=0/3 type=localizedrain:rain rain=0.52 thunder=0.0 velocity=0.0,0.0 manual=true lifetimeTicks=-1 stageTicks=5400.0
+  ```
 
 ## Building
 

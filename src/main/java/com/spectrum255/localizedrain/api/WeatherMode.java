@@ -1,11 +1,12 @@
 package com.spectrum255.localizedrain.api;
 
 import com.spectrum255.localizedrain.Config;
-import com.spectrum255.localizedrain.Localizedrain;
+import net.minecraft.network.chat.Component;
 import net.minecraft.util.StringRepresentable;
+import net.neoforged.neoforge.common.TranslatableEnum;
 
 /** 天气接管模式。只能通过配置文件切换，运行期不做热切换。 */
-public enum WeatherMode implements StringRepresentable {
+public enum WeatherMode implements StringRepresentable, TranslatableEnum {
     PATCHES("patches"),
     MOBILE("mobile"),
     VANILLA("vanilla");
@@ -19,6 +20,12 @@ public enum WeatherMode implements StringRepresentable {
     @Override
     public String getSerializedName() {
         return this.name;
+    }
+
+    /** 配置界面循环按钮显示的文本；没有 {@code TranslatableEnum} 时 NeoForge 会显示枚举常量名。 */
+    @Override
+    public Component getTranslatedName() {
+        return Component.translatable("localizedrain.configuration.weatherMode." + this.name());
     }
 
     /** 配置加载/重载与服务器启动时清空，避免热路径反复读配置。 */
@@ -39,19 +46,12 @@ public enum WeatherMode implements StringRepresentable {
     }
 
     private static WeatherMode read() {
-        String value;
         try {
-            value = Config.WEATHER_MODE.get();
+            WeatherMode mode = Config.WEATHER_MODE.get();
+            return mode == null ? PATCHES : mode;
         } catch (IllegalStateException ignored) {
             // 配置尚未加载：按默认值推进，避免服务器启动早期抛异常
             return PATCHES;
         }
-        for (WeatherMode mode : values()) {
-            if (mode.name.equals(value)) {
-                return mode;
-            }
-        }
-        Localizedrain.LOGGER.warn("[localizedrain] unknown weatherMode '{}', falling back to patches", value);
-        return PATCHES;
     }
 }

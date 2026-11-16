@@ -12,7 +12,7 @@ import net.minecraft.resources.ResourceLocation;
 
 /** 服务端 → 客户端的风暴全量快照（40 tick 一次校正 + 生成/移除/换阶段立即推送）。
  * 尾部的 {@code isolatedMode}/{@code falloffRatio} 让客户端只使用服务端配置，避免联机时 COMMON 配置不同步。 */
-public record StormSyncPayload(List<StormEntry> storms, String isolatedMode, double falloffRatio)
+public record StormSyncPayload(List<StormEntry> storms, String isolatedMode, double falloffRatio, boolean active)
         implements CustomPacketPayload {
     public static final Type<StormSyncPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "storm_sync"));
@@ -56,6 +56,7 @@ public record StormSyncPayload(List<StormEntry> storms, String isolatedMode, dou
 
     public static final StreamCodec<RegistryFriendlyByteBuf, StormSyncPayload> STREAM_CODEC = StreamCodec.of(
             (buf, payload) -> {
+                buf.writeBoolean(payload.active());
                 buf.writeVarInt(payload.storms().size());
                 for (StormEntry entry : payload.storms()) {
                     ENTRY_CODEC.encode(buf, entry);
@@ -64,12 +65,13 @@ public record StormSyncPayload(List<StormEntry> storms, String isolatedMode, dou
                 buf.writeDouble(payload.falloffRatio());
             },
             buf -> {
+                boolean active = buf.readBoolean();
                 int size = buf.readVarInt();
                 List<StormEntry> storms = new ArrayList<>(size);
                 for (int index = 0; index < size; index++) {
                     storms.add(ENTRY_CODEC.decode(buf));
                 }
-                return new StormSyncPayload(storms, buf.readUtf(), buf.readDouble());
+                return new StormSyncPayload(storms, buf.readUtf(), buf.readDouble(), active);
             });
 
     @Override

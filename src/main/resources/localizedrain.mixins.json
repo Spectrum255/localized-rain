@@ -5,6 +5,7 @@
   "mixins": [
     "LevelWeatherMixin",
     "ServerLevelWeatherMixin",
+    "ServerLifecycleHooksMixin",
     "EntitySkyLightMixin",
     "MonsterSpawnMixin"
   ],

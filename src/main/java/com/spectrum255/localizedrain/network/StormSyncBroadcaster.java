@@ -39,6 +39,6 @@ public final class StormSyncBroadcaster implements StormSyncSink {
                     entry.rain(), entry.thunder(),
                     entry.manual(), entry.dying(), entry.dyingTicksLeft()));
         }
-        return new StormSyncPayload(entries, data.isolatedMode(), data.falloffRatio());
+        return new StormSyncPayload(entries, data.isolatedMode(), data.falloffRatio(), data.active());
     }
 }
