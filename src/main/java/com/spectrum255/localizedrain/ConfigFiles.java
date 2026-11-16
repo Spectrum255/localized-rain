@@ -1,5 +1,6 @@
 package com.spectrum255.localizedrain;
 
+import com.spectrum255.localizedrain.api.WeatherMode;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -8,11 +9,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.fml.loading.FMLPaths;
 
@@ -243,6 +246,78 @@ public final class ConfigFiles {
         Path directory = server.getWorldPath(new LevelResource("serverconfig")).resolve(MOD_CONFIG_DIR);
         return "weather=" + Files.exists(directory.resolve("weather.toml"))
                 + ", filters=" + Files.exists(directory.resolve("filters.toml"));
+    }
+
+    /** 每个存档 weather.toml 上一次被读取时的修改时间，用于 weatherMode 热重载检测。 */
+    private static final Map<Path, Long> WEATHER_MODE_MTIMES = new HashMap<>();
+
+    private static Path worldWeatherFile(ServerLevel level) {
+        return level.getServer().getWorldPath(new LevelResource("serverconfig"))
+                .resolve(MOD_CONFIG_DIR).resolve("weather.toml");
+    }
+
+    /**
+     * 把当前存档 weather.toml 的 {@code weatherMode} 行改成指定模式，供 {@code /weather mode} 持久化。
+     * 文件不存在时直接返回（运行时切换仍会生效，只是重启后回退）。
+     */
+    public static void writeWeatherMode(ServerLevel level, WeatherMode mode) {
+        Path file = worldWeatherFile(level);
+        if (Files.notExists(file)) {
+            return;
+        }
+        try {
+            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            boolean replaced = false;
+            for (int index = 0; index < lines.size(); index++) {
+                String trimmed = lines.get(index).trim();
+                int equals = trimmed.indexOf('=');
+                if (equals <= 0 || !trimmed.substring(0, equals).trim().equals("weatherMode")) {
+                    continue;
+                }
+                lines.set(index, "weatherMode = \"" + mode.name() + "\"");
+                replaced = true;
+                break;
+            }
+            if (!replaced) {
+                lines.add("weatherMode = \"" + mode.name() + "\"");
+            }
+            writeAtomically(file, String.join("\n", lines) + "\n");
+            WEATHER_MODE_MTIMES.put(file, Files.getLastModifiedTime(file).toMillis());
+        } catch (IOException exception) {
+            Localizedrain.LOGGER.warn("[localizedrain] could not persist weatherMode to {}", file, exception);
+        }
+    }
+
+    /**
+     * 检测当前存档 weather.toml 是否被外部修改；有变化时返回解析到的模式，否则返回 {@code null}。
+     * 第一次看到某文件只记录时间戳（启动时的读取不算修改）。
+     */
+    public static WeatherMode pollWeatherMode(ServerLevel level) {
+        Path file = worldWeatherFile(level);
+        try {
+            if (Files.notExists(file)) {
+                return null;
+            }
+            long modified = Files.getLastModifiedTime(file).toMillis();
+            Long previous = WEATHER_MODE_MTIMES.put(file, modified);
+            if (previous == null || previous == modified) {
+                return null;
+            }
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (!trimmed.startsWith("weatherMode")) {
+                    continue;
+                }
+                int equals = trimmed.indexOf('=');
+                if (equals < 0) {
+                    continue;
+                }
+                return WeatherMode.parse(trimmed.substring(equals + 1).trim().replace("\"", ""));
+            }
+        } catch (IOException exception) {
+            // 读取失败忽略，下一轮再试
+        }
+        return null;
     }
 
     /**

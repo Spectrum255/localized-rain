@@ -14,7 +14,7 @@ Vanilla Minecraft weather is always triggered at random and applies to the entir
 
 ## Three weather modes
 
-`weatherMode` picks one of three modes. The default is `patches`; you can switch it in the config file.
+`weatherMode` picks one of three modes. The default is `patches`. Switch it at runtime with `/weather mode <patches|mobile|vanilla>` (takes effect within about a second), or edit the save's `weather.toml`; both are hot-reloaded without restarting the game.
 
 | Mode      | Description                                                                                                             |
 | --------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -129,7 +129,7 @@ Main options (with defaults):
 
 | Key                              | Default   | Description                                              |
 | -------------------------------- | --------- | -------------------------------------------------------- |
-| `weatherMode`                    | `patches` | `patches` / `mobile` / `vanilla`; restart required to switch |
+| `weatherMode`                    | `patches` | `patches` / `mobile` / `vanilla`; hot-switchable at runtime (about a second, or use `/weather mode`) |
 | `weatherSimulationIntervalTicks` | `20`      | Advance interval for loaded biome patches; larger is cheaper |
 | `scan3dSubstates`                | `true`    | Whether to scan 3D substates such as caves and floating islands |
 | `stateRetentionDays`             | `7`       | Days to keep patch states; `0` disables time-based cleanup |

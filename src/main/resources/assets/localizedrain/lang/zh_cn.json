@@ -98,6 +98,7 @@
   "commands.localizedrain.storm.set.type": "已生成 %s 个风暴（类型 %s）",
   "commands.localizedrain.storm.area_hint": "区域由单个圆形风暴近似覆盖（半径 = 中心到区域最远角的距离 + 64 格；只生成一个），四角可能落在范围外",
   "commands.localizedrain.weather.outside": "该位置在世界高度之外，没有天气",
+  "commands.localizedrain.mode.set": "天气模式已切换为 %s（约 1 秒内生效）",
   "commands.localizedrain.weather.biome_excluded": "这些范围全部被强制晴天锁定，未做任何修改（共 %s 处）",
   "commands.localizedrain.weather.biome_skipped": "（有 %s 处范围被强制晴天锁定）",
   "commands.localizedrain.weather.area.too_large": "所选区域需要检查 %s 个位置，上限为 %s",

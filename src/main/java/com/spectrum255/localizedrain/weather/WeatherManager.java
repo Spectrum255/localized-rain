@@ -1,6 +1,8 @@
 package com.spectrum255.localizedrain.weather;
 
 import com.spectrum255.localizedrain.Config;
+import com.spectrum255.localizedrain.ConfigFiles;
+import com.spectrum255.localizedrain.Localizedrain;
 import com.spectrum255.localizedrain.api.StormTags;
 import com.spectrum255.localizedrain.api.WeatherMode;
 import com.spectrum255.localizedrain.api.WeatherType;
@@ -80,14 +82,25 @@ public final class WeatherManager {
     private WeatherManager() {}
 
     public static void tick(ServerLevel level) {
+        // 热重载：每 20 tick 检查一次配置界面与存档 weather.toml，改完约 1 秒生效
+        if (level.getGameTime() % 20L == 0L) {
+            WeatherMode.poll();
+            WeatherMode fromFile = ConfigFiles.pollWeatherMode(level);
+            if (fromFile != null && fromFile != WeatherMode.current()) {
+                WeatherMode.apply(fromFile);
+                Localizedrain.LOGGER.info("[localizedrain] weather mode hot-reloaded from weather.toml: {}",
+                        fromFile.getSerializedName());
+            }
+        }
         WeatherMode mode = WeatherMode.current();
-        // 模式在运行期变化（配置重载）时立刻重推风暴快照：客户端据此停止/开始接管雨量
+        // 模式在运行期变化（配置重载/命令/文件热重载）时立刻重推风暴快照：客户端据此停止/开始接管雨量
         if (mode != lastMode) {
             lastMode = mode;
             // 移动模式期间 send() 不运行，LAST_SENT 停在进入移动模式前的旧值；不清掉的话，
             // 切回 patches 后目标值只要与旧缓存相同就不会发包，客户端会一直保留风暴雨量。
             LAST_SENT.clear();
             StormManager.refreshAll(level.getServer());
+            Localizedrain.LOGGER.info("[localizedrain] weather mode is now {}", mode.getSerializedName());
         }
         switch (mode) {
             case PATCHES -> tickPatches(level);

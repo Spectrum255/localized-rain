@@ -108,7 +108,7 @@ public final class Config {
     // ---- 移动天气模式（仅 weatherMode=mobile 时生效） ----
 
     public static final ModConfigSpec.EnumValue<WeatherMode> WEATHER_MODE =
-            WEATHER_BUILDER.comment("Weather system mode. Requires a game restart.",
+            WEATHER_BUILDER.comment("Weather system mode. Applies at runtime within about a second (or use /weather mode).",
                             "patches = existing 3D biome-patch weather",
                             "mobile  = moving storms with wind, evolution and 3D coverage",
                             "vanilla = do not take over vanilla weather at all")

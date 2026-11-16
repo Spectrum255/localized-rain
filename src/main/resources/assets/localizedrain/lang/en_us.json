@@ -98,6 +98,7 @@
   "commands.localizedrain.storm.set.type": "Spawned %s storm(s) of type %s",
   "commands.localizedrain.storm.area_hint": "The area is approximated by one circular storm (radius = distance from the center to the farthest corner + 64 blocks); corners may lie outside it",
   "commands.localizedrain.weather.outside": "That position is outside the world height and has no weather",
+  "commands.localizedrain.mode.set": "Weather mode switched to %s (applies within about a second)",
   "commands.localizedrain.weather.biome_excluded": "All %s location(s) are locked to clear by a forced weather rule; nothing was changed",
   "commands.localizedrain.weather.biome_skipped": "(%s location(s) skipped by forced-clear rules)",
   "commands.localizedrain.weather.area.too_large": "The selected area needs %s sample positions; the maximum is %s",

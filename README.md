@@ -14,7 +14,7 @@ Minecraft 原版的天气总是随机触发且全局生效的，这不合理。�
 
 ## 三种天气模式
 
-`weatherMode` 三选一，默认为 `patches`，可在配置文件中切换。
+`weatherMode` 三选一，默认为 `patches`。运行期可用 `/weather mode <patches|mobile|vanilla>` 切换（约 1 秒内生效），也可直接编辑当前存档的 `weather.toml`；两种方式都会热重载，不需要重启游戏。
 
 | 模式        | 说明                                                       |
 | --------- | -------------------------------------------------------- |
@@ -128,7 +128,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 | 键                                | 默认        | 说明                                     |
 | -------------------------------- | --------- | -------------------------------------- |
-| `weatherMode`                    | `patches` | `patches` / `mobile` / `vanilla`，切换需重启 |
+| `weatherMode`                    | `patches` | `patches` / `mobile` / `vanilla`；运行期热切换（约 1 秒生效，也可用 `/weather mode` 命令） |
 | `weatherSimulationIntervalTicks` | `20`      | 已加载群系片的推进间隔，越大越省性能                       |
 | `scan3dSubstates`                | `true`    | 是否扫描洞穴/浮岛等 3D 子状态                      |
 | `stateRetentionDays`             | `7`       | 片状态保留天数，`0` 关闭时间清理                     |

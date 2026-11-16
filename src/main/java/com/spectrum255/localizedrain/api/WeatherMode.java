@@ -5,7 +5,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.util.StringRepresentable;
 import net.neoforged.neoforge.common.TranslatableEnum;
 
-/** 天气接管模式。只能通过配置文件切换，运行期不做热切换。 */
+/**
+ * 天气接管模式。支持运行期热切换：{@code /weather mode} 命令、配置界面改动、以及直接编辑
+ * 存档的 {@code serverconfig/localizedrain/weather.toml} 都会在约 1 秒内生效。
+ */
 public enum WeatherMode implements StringRepresentable, TranslatableEnum {
     PATCHES("patches"),
     MOBILE("mobile"),
@@ -66,6 +69,40 @@ public enum WeatherMode implements StringRepresentable, TranslatableEnum {
 
     public static void invalidate() {
         cached = null;
+    }
+
+    /**
+     * 运行期切换：立即更新缓存，并尝试把新值写进当前配置（配置未加载时只改缓存）。
+     * 真正负责通知客户端的重推逻辑在 {@code WeatherManager.tick} 检测到模式变化时执行。
+     */
+    public static void apply(WeatherMode mode) {
+        if (mode == null) {
+            return;
+        }
+        cached = mode;
+        try {
+            Config.WEATHER_MODE.set(mode);
+        } catch (IllegalStateException ignored) {
+            // 配置尚未加载（例如数据包注册阶段调用）：只更新内存缓存
+        }
+    }
+
+    /**
+     * 轮询配置界面/文件改动：读一次当前配置值与缓存比对，变化时更新缓存并返回 {@code true}。
+     * 由 {@code WeatherManager.tick} 每 20 tick 调用。
+     */
+    public static boolean poll() {
+        WeatherMode configured;
+        try {
+            configured = Config.WEATHER_MODE.get();
+        } catch (IllegalStateException ignored) {
+            return false;
+        }
+        if (configured == null || configured == cached) {
+            return false;
+        }
+        cached = configured;
+        return true;
     }
 
     private static WeatherMode read() {

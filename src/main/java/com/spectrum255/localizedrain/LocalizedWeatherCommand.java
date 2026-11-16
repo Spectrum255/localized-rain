@@ -18,6 +18,7 @@ import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSnapshot;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
+import com.spectrum255.localizedrain.api.WeatherMode;
 import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.api.WindState;
@@ -66,6 +67,13 @@ public final class LocalizedWeatherCommand {
 
     private static final SuggestionProvider<CommandSourceStack> TYPE_SUGGESTIONS =
             (context, builder) -> suggestTypes(context, builder);
+    private static final SuggestionProvider<CommandSourceStack> MODE_SUGGESTIONS =
+            (context, builder) -> {
+                for (WeatherMode mode : WeatherMode.values()) {
+                    builder.suggest(mode.getSerializedName());
+                }
+                return builder.buildFuture();
+            };
     private static final SuggestionProvider<CommandSourceStack> PROFILE_SUGGESTIONS =
             (context, builder) -> {
                 for (ResourceLocation id : StormProfiles.ids(context.getSource().getLevel())) {
@@ -89,7 +97,27 @@ public final class LocalizedWeatherCommand {
                 .then(mode("rain", context -> WeatherTypes.RAIN_ID))
                 .then(mode("thunder", context -> WeatherTypes.THUNDER_ID))
                 .then(Commands.literal("type").then(typeNode))
+                .then(Commands.literal("mode")
+                        .then(Commands.argument("mode", StringArgumentType.word())
+                                .suggests(MODE_SUGGESTIONS)
+                                .executes(LocalizedWeatherCommand::setMode)))
                 .then(stormCommand()));
+    }
+
+    /** `/weather mode <patches|mobile|vanilla>`：运行期热切换并写回当前存档的 weather.toml。 */
+    private static int setMode(CommandContext<CommandSourceStack> context) {
+        WeatherMode mode = WeatherMode.parse(StringArgumentType.getString(context, "mode"));
+        ServerLevel level = context.getSource().getLevel();
+        ConfigFiles.writeWeatherMode(level, mode);
+        WeatherMode.apply(mode);
+        // 立刻重推风暴快照，客户端在下一 tick 之前就知道模式已变
+        StormManager.refreshAll(level.getServer());
+        Localizedrain.LOGGER.info("[localizedrain] weather mode switched to {} via command",
+                mode.getSerializedName());
+        context.getSource().sendSuccess(() -> Component.translatable(
+                "commands.localizedrain.mode.set",
+                Component.translatable("localizedrain.configuration.weatherMode." + mode.name())), true);
+        return 1;
     }
 
     /** `/weather storm` 子树：移动模式下手动生成、改写与移除风暴的所有入口。 */
