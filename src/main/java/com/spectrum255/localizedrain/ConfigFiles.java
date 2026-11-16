@@ -28,6 +28,8 @@ public final class ConfigFiles {
     private static final String LEGACY_FILE = "localizedrain-common.toml";
     /** 需要按存档独立的 SERVER 配置文件：全局文件只作为新建存档的默认值。 */
     private static final String[] PER_WORLD_FILES = {"weather.toml", "filters.toml"};
+    /** 已删除的配置键：旧 weather.toml 里可能残留，留着会让用户误以为还能改。 */
+    private static final String REMOVED_WEATHER_KEY = "manualStormRadius";
 
     /**
      * 旧版单文件配置里的顶层键。迁移时按新文件拆分：
@@ -245,6 +247,7 @@ public final class ConfigFiles {
             Localizedrain.LOGGER.info("[localizedrain] seeded {} per-world config file(s): {}",
                     created, worldConfigStatus(server));
         }
+        stripRemovedKeys(server);
         Path directory = server.getWorldPath(new LevelResource("serverconfig")).resolve(MOD_CONFIG_DIR);
         int migrated = migrateWorldWeatherMode(server);
         if (migrated > 0) {
@@ -264,6 +267,47 @@ public final class ConfigFiles {
             }
         }
         return created;
+    }
+
+    /**
+     * 从全局与当前存档的 {@code weather.toml} 中删除已废弃的键。
+     * NeoForge 会忽略未知键，但保留会让用户以为修改它仍有效；返回删除的行数。
+     */
+    private static int stripRemovedKeys(MinecraftServer server) {
+        int removed = stripRemovedKeys(FMLPaths.CONFIGDIR.get().resolve(MOD_CONFIG_DIR).resolve("weather.toml"));
+        Path worldWeather = server.getWorldPath(new LevelResource("serverconfig"))
+                .resolve(MOD_CONFIG_DIR).resolve("weather.toml");
+        removed += stripRemovedKeys(worldWeather);
+        return removed;
+    }
+
+    private static int stripRemovedKeys(Path file) {
+        if (Files.notExists(file)) {
+            return 0;
+        }
+        try {
+            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            List<String> kept = new java.util.ArrayList<>(lines.size());
+            int removed = 0;
+            for (String line : lines) {
+                String trimmed = line.trim();
+                int equals = trimmed.indexOf('=');
+                String key = equals > 0 ? trimmed.substring(0, equals).trim() : "";
+                if (REMOVED_WEATHER_KEY.equals(key)) {
+                    removed++;
+                } else {
+                    kept.add(line);
+                }
+            }
+            if (removed > 0) {
+                Files.write(file, kept, StandardCharsets.UTF_8);
+                Localizedrain.LOGGER.info("[localizedrain] removed deprecated config key '{}' from {}", REMOVED_WEATHER_KEY, file);
+            }
+            return removed;
+        } catch (IOException exception) {
+            Localizedrain.LOGGER.warn("[localizedrain] could not clean deprecated keys in {}", file, exception);
+            return 0;
+        }
     }
 
     private static boolean seedFile(MinecraftServer server, String fileName) {

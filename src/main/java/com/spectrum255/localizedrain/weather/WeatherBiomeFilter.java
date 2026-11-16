@@ -77,7 +77,11 @@ public final class WeatherBiomeFilter {
 
     /** 该群系片被强制成的天气类型；强制晴天返回 clear 的 id，没有强制规则时返回 null。 */
     public static ResourceLocation forcedType(ServerLevel level, String patch) {
-        Decision decision = decision(level, patch);
+        return forcedType(decision(level, patch));
+    }
+
+    /** 已持有 {@link Decision} 时复用：避免同一次判定里重复构造候选池。 */
+    private static ResourceLocation forcedType(Decision decision) {
         if (decision.forced() != null) {
             return decision.forced().id();
         }
@@ -120,7 +124,8 @@ public final class WeatherBiomeFilter {
         if (patch == null) {
             return true;
         }
-        ResourceLocation forced = forcedType(level, patch);
+        Decision decision = decision(level, patch);
+        ResourceLocation forced = forcedType(decision);
         if (forced != null) {
             // 强制天气：任意阶段匹配即可；强制晴天拒绝一切自然风暴
             return !WeatherTypes.CLEAR_ID.equals(forced) && stageTypes.contains(forced);
@@ -128,8 +133,8 @@ public final class WeatherBiomeFilter {
         if (WeatherTypes.CLEAR_ID.equals(initialType)) {
             return false;
         }
-        // 白名单/黑名单只按初始阶段判定
-        for (Candidate candidate : pool(level, patch)) {
+        // 白名单/黑名单只按初始阶段判定；复用上面取得的 Decision，避免二次构造候选池
+        for (Candidate candidate : decision.pool()) {
             if (!candidate.clear() && candidate.id().equals(initialType)) {
                 return true;
             }

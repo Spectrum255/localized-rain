@@ -92,13 +92,13 @@ public final class WeatherApi {
      * <p>移动模式下：{@code clear} 只按列移除覆盖该位置的风暴，不使用半径；
      * 其它类型按档案半径区间生成一个手动风暴，若该位置被强制晴天锁定或没有匹配的档案则返回 {@code false}。</p>
      *
-     * @return 位置无对应群系片（世界外或解析失败）、被强制晴天锁定、或没有匹配档案时返回 {@code false}
+     * @return 位置在世界外、被强制晴天锁定（非 {@code clear}）、或没有匹配档案时返回 {@code false}
      */
     public static boolean setWeatherAt(ServerLevel level, BlockPos pos, ResourceLocation typeId, int duration) {
         if (WeatherMode.current() == WeatherMode.MOBILE) {
             if (WeatherTypes.CLEAR_ID.equals(typeId)) {
-                // 世界外 / 解析不到群系片的坐标不算「清除成功」，与 @return 一致
-                if (level.isOutsideBuildHeight(pos) || WeatherManager.patchAt(level, pos) == null) {
+                // clear 只需要水平坐标：在世界内即可，不解析群系片（避免列缓存未命中时的无预算整列扫描）
+                if (level.isOutsideBuildHeight(pos)) {
                     return false;
                 }
                 // clear 不是「生成晴天风暴」，而是移除覆盖该位置的风暴：不生成、也不使用半径

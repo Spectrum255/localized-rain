@@ -74,6 +74,7 @@ Forced weather behaves differently per mode:
 - **Patch mode (`patches`)**: locks the biome's weather: natural cycling, commands and the API cannot override it, and natural storms never spawn in that biome (storms that already exist still rain when they drift over it).
 - **Mobile mode (`mobile`)**: precipitation only comes from storms. Forcing a concrete weather (rain / thunder / custom type) only acts as a **natural-storm spawn-point filter** and does not create persistent precipitation in that biome; only forced `clear` blocks manual commands/API, while forced rain/thunder no longer blocks them. To get rain in a forced biome under mobile mode, spawn a storm manually (`/weather rain`, `/weather storm ...`, or the storm API).
 - Natural storms are evaluated against the profile's **initial stage type** for whitelist/blacklist (a multi-stage profile cannot bypass the filter through later stages); forced weather matches **any stage** of the profile (a thunderstorm profile starts with rain).
+- Manual storm radius: `/weather storm at|spawn` and the `setWeatherAt` API use the profile's own `radius` range when no radius is given (e.g. `drizzle` 180–320); `/weather storm area` uses "half of the area's bounding rectangle + a fixed 64 blocks" and spawns a single circular storm as an approximation.
 
 Whitelist/blacklist only constrain natural cycling; commands can still manually set weather that has been excluded.
 
