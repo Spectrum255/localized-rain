@@ -161,6 +161,20 @@ Config files are split into global and per-save layers:
 
 The global files can be edited from the main menu (Mods → Localized Rain → Config); they define the starting values for **new worlds** and never touch existing saves. When a save is created, the mod copies `global-weather.toml` / `global-filters.toml` to `<save>/serverconfig/localizedrain/weather.toml` / `filters.toml`; edit the per-save copies in game (Server options) to change an existing world. The legacy `config/localizedrain-common.toml` is split automatically on launch: weather/storm keys go to `global-weather.toml`, the three filter lists go to `global-filters.toml`, and debug keys go to `common.toml` (existing targets are skipped; the old file is kept as a backup). In existing saves a `weatherMode` that is still the default `PATCHES` is migrated once from the legacy file (a `.weatherMode-migrated` marker is written to the save directory, so setting it back to `PATCHES` later is respected); a mode you picked in a given save is never overwritten.
 
+### Datapacks in the config folder
+
+Besides the built-in `data/`, datapacks can be dropped straight into the config directory:
+
+```text
+config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/storm_profile/<id>.json
+config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_type/<id>.json
+```
+
+- Every sub-directory is one datapack; `pack.mcmeta` is optional. Folder names may only contain `a-z`, `0-9`, `_`, `.` and `-`; other names are ignored with a warning.
+- `loadConfigDatapacks` in `datapacks.toml` (default `true`) controls whether the whole folder is loaded; with `false` these packs are not added to the pack repository.
+- The pack repository is assembled at startup, so adding, removing or renaming a folder needs a game restart; `/reload` only re-reads packs that are already selected.
+- These packs are always enabled and sit above the built-in content, so a profile/type with the same id overrides the built-in definition.
+
 Main options (with defaults):
 
 ### General and patch mode

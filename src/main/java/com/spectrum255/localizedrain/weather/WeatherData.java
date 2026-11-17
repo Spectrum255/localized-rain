@@ -619,9 +619,18 @@ public final class WeatherData extends SavedData {
         private boolean frozen;
         /** 是否被强制天气锁定；锁定期间睡觉清空天气不会生效，解除后自动恢复随机循环。 */
         private boolean forced;
-        /** 当前类型是否会真的降水（决定 rainLevel 目标）；非降水自定义类型为 false。 */
+        /**
+         * 派生能力位：是否真的降水（决定 rainLevel 目标）。
+         *
+         * <p>语义上等价于「当前状态在降水，且天气类型 hasPrecipitation()」。它由 apply/force/tick/load
+         * 共同维护：调用方设置 raining 时必须同步写它，否则会出现「下雨的干燥类型」这类不一致状态。</p>
+         */
         private boolean precipitating;
-        /** 当前类型是否允许雷暴；候选天气里非雷暴类型为 false。 */
+        /**
+         * 派生能力位：是否允许雷暴（决定雷包与 thunderLevel 目标）。
+         *
+         * <p>候选天气里非雷暴类型为 false；非降水类型的雷暴能力也应为 false。</p>
+         */
         private boolean thunderAllowed;
         /** 是否由指令/API 手动设置：白名单/黑名单只约束自然循环，不约束手动覆盖。 */
         private boolean manual;

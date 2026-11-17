@@ -63,6 +63,16 @@ public final class Localizedrain {
                 "localizedrain/global-filters.toml");
         modContainer.registerConfig(ModConfig.Type.SERVER, Config.WEATHER_SPEC, "localizedrain/weather.toml");
         modContainer.registerConfig(ModConfig.Type.SERVER, FilterConfig.FILTERS_SPEC, "localizedrain/filters.toml");
+        // 数据包总开关：config/localizedrain/datapacks.toml
+        modContainer.registerConfig(ModConfig.Type.COMMON, DatapackConfig.SPEC, "localizedrain/datapacks.toml");
+        // 配置目录里的数据包：config/localizedrain/datapacks/<name>/data/...
+        try {
+            Files.createDirectories(ConfigDatapacks.root());
+        } catch (IOException exception) {
+            LOGGER.warn("[localizedrain] could not create config datapack directory {}", ConfigDatapacks.root(),
+                    exception);
+        }
+        modEventBus.addListener(ConfigDatapacks::onAddPackFinders);
         // 领域层不直接构造网络包：安装网络层实现
         StormManager.setSyncSink(new StormSyncBroadcaster());
         // 天气类型与风暴档案都是数据包注册表：内容来自

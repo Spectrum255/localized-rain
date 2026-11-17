@@ -216,7 +216,7 @@ final class StormSpawner {
     /** 档案的 {@code biomes} 列表优先；未写时走默认筛选（会下雨的 SURFACE 风暴只落在会降水的群系）。 */
     private static boolean biomeAllows(ServerLevel level, BlockPos pos, StormProfile profile) {
         Holder<Biome> biome = level.getBiome(pos);
-        return profile.restrictsBiomes() ? profile.allowsBiome(biome) : profile.defaultBiomeAllowed(biome);
+        return profile.restrictsBiomes() ? profile.allowsBiome(biome) : profile.defaultBiomeAllowed(level, biome);
     }
 
     /** 生成点过滤器：只约束生成中心，不拦截后续移动（设计 §7.2）。

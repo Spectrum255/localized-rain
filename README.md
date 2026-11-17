@@ -164,6 +164,20 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 全局文件可以在游戏主菜单的「模组 → Localized Rain → 配置」里编辑（服务端配置只有在世界运行时才能编辑，所以默认值单独拆成全局文件），它决定**新世界**的初始值，不会影响已有存档。新建存档时，模组会把 `global-weather.toml` / `global-filters.toml` 复制为 `<存档>/serverconfig/localizedrain/weather.toml` / `filters.toml`，之后两者互不影响；当前存档的值请在游戏内「服务端选项」里修改。旧版 `config/localizedrain-common.toml` 会在启动时自动拆分迁移：天气/风暴键 → `global-weather.toml`，三个过滤器列表 → `global-filters.toml`，调试键 → `common.toml`（目标文件已存在则跳过；旧文件保留作备份）。已有存档中仍为默认 `PATCHES` 的 `weatherMode` 会跟随旧文件迁移一次（迁移后在存档目录留下 `.weatherMode-migrated` 标记，之后手动改回 `PATCHES` 不会被再次覆盖），每个存档自己选过的模式不会被覆盖。
 
+### 配置目录数据包
+
+除了模组自带的 `data/`，也可以把数据包直接放进配置目录：
+
+```text
+config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/storm_profile/<id>.json
+config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_type/<id>.json
+```
+
+- 每个子目录就是一个数据包，`pack.mcmeta` 可省略；目录名只允许 `a-z`、`0-9`、`_`、`.`、`-`，其他名字会被忽略并打警告。
+- `datapacks.toml` 里的 `loadConfigDatapacks`（默认 `true`）控制是否加载整个目录；设为 `false` 后这些数据包不会进入数据包仓库。
+- 数据包仓库只在启动时组装，新增、删除或改名后需要重启游戏；`/reload` 只会重读已经选中的包。
+- 这些数据包在列表里始终启用并排在内置内容之上，因此同 id 的档案/类型会覆盖内置定义。
+
 以下为主要配置项（默认值）。
 
 ### 通用与片模式

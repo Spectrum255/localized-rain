@@ -209,12 +209,20 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
      * 没有显式 biomes 时使用的默认生物群系筛选：会下雨的 {@link VerticalMode#SURFACE} 风暴
      * 只落在会降水的群系里；洞穴/整列档案不受此限制。
      */
-    public boolean defaultBiomeAllowed(Holder<Biome> biome) {
+    /**
+     * 档案没有显式 biomes 列表时的默认筛选。
+     *
+     * <p>判断依据是「天气类型是否有降水能力」（{@link WeatherType#hasPrecipitation()}），不是阶段里的
+     * rain 强度：纯降雪档案即使 rain = 0 也应该只落在会降水的群系；纯特效云团即使写了 rain &gt; 0
+     * 也不该被错误地限制到降水群系。</p>
+     */
+    public boolean defaultBiomeAllowed(ServerLevel level, Holder<Biome> biome) {
         if (this.vertical != VerticalMode.SURFACE) {
             return true;
         }
         for (Stage stage : this.stages) {
-            if (stage.rain().max() > 0.0D) {
+            WeatherType type = WeatherTypes.resolve(level, stage.type());
+            if (type != null && type.hasPrecipitation()) {
                 return biome.value().hasPrecipitation();
             }
         }
