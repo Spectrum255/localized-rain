@@ -115,13 +115,15 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 配置文件分为全局与存档两级：
 
-| 文件 | 位置 | 内容 |
-| --- | --- | --- |
-| `common.toml` | `config/localizedrain/`（全局） | 调试开关（`debugLogging` / `logWeatherChanges` / `logStormSpawns`），所有存档共用 |
-| `weather.toml` | 全局：`config/localizedrain/weather.toml`（新存档默认值）；存档：`<存档>/serverconfig/localizedrain/weather.toml` | 天气模式、天气模拟区间、移动风暴参数；每个存档独立 |
-| `filters.toml` | 全局：`config/localizedrain/filters.toml`（新存档默认值）；存档：`<存档>/serverconfig/localizedrain/filters.toml` | 天气过滤器（群系=天气），三项列表直接位于文件根级；每个存档独立 |
+| 文件 | 位置 | 主菜单可编辑 | 内容 |
+| --- | --- | --- | --- |
+| `common.toml` | `config/localizedrain/`（全局） | 是 | 调试开关（`debugLogging` / `logWeatherChanges` / `logStormSpawns` / `logStormSpawnsToChat`），所有存档共用 |
+| `global-weather.toml` | `config/localizedrain/`（全局） | 是 | **新存档**的天气默认值（天气模式、模拟区间、移动风暴参数） |
+| `global-filters.toml` | `config/localizedrain/`（全局） | 是 | **新存档**的天气过滤器默认值（群系=天气） |
+| `weather.toml` | `<存档>/serverconfig/localizedrain/` | 否（进游戏后编辑） | 当前存档的天气设置；创建存档时从 `global-weather.toml` 复制 |
+| `filters.toml` | `<存档>/serverconfig/localizedrain/` | 否（进游戏后编辑） | 当前存档的天气过滤器；创建存档时从 `global-filters.toml` 复制 |
 
-每个存档首次启动时，模组会把全局 `config/localizedrain/weather.toml` 与 `filters.toml` 复制为该存档的 `<存档>/serverconfig/localizedrain/` 下的独立副本（已存在则不覆盖）；之后的修改互不影响。全新安装的第一个存档可能还没有全局文件，此时本次启动使用内置/全局默认，并从下一次启动起使用存档副本。改动已存在的存档请编辑该存档下的文件。旧版 `config/localizedrain-common.toml` 会在启动时自动拆分迁移：天气/风暴键 → `weather.toml`，三个过滤器列表 → `filters.toml`，调试键 → `common.toml`（目标文件已存在则跳过；旧文件保留作备份）。已有存档中仍为默认 `PATCHES` 的 `weatherMode` 会跟随旧文件迁移一次（迁移后在存档目录留下 `.weatherMode-migrated` 标记，之后手动改回 `PATCHES` 不会被再次覆盖），每个存档自己选过的模式不会被覆盖。
+全局文件可以在游戏主菜单的「模组 → Localized Rain → 配置」里编辑（服务端配置只有在世界运行时才能编辑，所以默认值单独拆成全局文件），它决定**新世界**的初始值，不会影响已有存档。新建存档时，模组会把 `global-weather.toml` / `global-filters.toml` 复制为 `<存档>/serverconfig/localizedrain/weather.toml` / `filters.toml`，之后两者互不影响；当前存档的值请在游戏内「服务端选项」里修改。旧版 `config/localizedrain-common.toml` 会在启动时自动拆分迁移：天气/风暴键 → `global-weather.toml`，三个过滤器列表 → `global-filters.toml`，调试键 → `common.toml`（目标文件已存在则跳过；旧文件保留作备份）。已有存档中仍为默认 `PATCHES` 的 `weatherMode` 会跟随旧文件迁移一次（迁移后在存档目录留下 `.weatherMode-migrated` 标记，之后手动改回 `PATCHES` 不会被再次覆盖），每个存档自己选过的模式不会被覆盖。
 
 以下为主要配置项（默认值）。
 
@@ -138,8 +140,8 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `maxColumnScansPerTick`          | `4`       | 每 tick 最多新扫描的列数                        |
 | `debugLogging`                   | `false`   | 输出片扫描/合并的调试日志                                 |
 | `logWeatherChanges`              | `false`   | 群系片天气变化时输出位置与类型                           |
-| `logStormSpawns`                 | `true`    | 风暴生成时输出详细参数                                |
-| `logStormSpawnsToChat`           | `true`    | 风暴生成时在聊天栏报告中心坐标与类型              |
+| `logStormSpawns`                 | `false`   | 风暴生成时输出详细参数（调试用，默认关闭）                     |
+| `logStormSpawnsToChat`           | `false`   | 风暴生成时在聊天栏报告中心坐标与类型（调试用，默认关闭）      |
 
 ### 天气节奏（tick）
 
@@ -171,6 +173,8 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 | `stormSyncIntervalTicks`                | `40`            | 风暴快照校正间隔                              |
 | `falloffRatio`                          | `0.3`           | 风暴边缘的衰减宽度比例                           |
 | `lightningMultiplier`                   | `1.0`           | 落雷概率倍率，`0` 关闭                         |
+| `stormRadiusBase`                       | `0.0`           | 新生成风暴的基准半径（方块）；`0` = 使用档案自带的 `radius` 区间 |
+| `stormRadiusVariance`                   | `0.3`           | 基准半径的浮动率（`0.3` = ±30%），仅在 `stormRadiusBase > 0` 时生效 |
 
 ## 兼容性
 

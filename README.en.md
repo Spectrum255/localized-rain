@@ -116,13 +116,15 @@ Whitelist/blacklist only constrain natural cycling; commands can still manually 
 
 Config files are split into global and per-save layers:
 
-| File | Location | Content |
-| --- | --- | --- |
-| `common.toml` | `config/localizedrain/` (global) | debug switches, shared by every save |
-| `weather.toml` | global defaults at `config/localizedrain/weather.toml`; each save uses `<save>/serverconfig/localizedrain/weather.toml` | weather mode, simulation timings, moving-storm settings; per save |
-| `filters.toml` | global defaults at `config/localizedrain/filters.toml`; each save uses `<save>/serverconfig/localizedrain/filters.toml` | weather filters (biome=weather), three root-level lists; per save |
+| File | Location | Editable in main menu | Content |
+| --- | --- | --- | --- |
+| `common.toml` | `config/localizedrain/` (global) | yes | debug switches, shared by every save |
+| `global-weather.toml` | `config/localizedrain/` (global) | yes | weather defaults for **new saves** (weather mode, simulation timings, moving-storm settings) |
+| `global-filters.toml` | `config/localizedrain/` (global) | yes | weather filter defaults for **new saves** (biome=weather) |
+| `weather.toml` | `<save>/serverconfig/localizedrain/` | no (edit in game) | weather settings of the current save; copied from `global-weather.toml` when the save is created |
+| `filters.toml` | `<save>/serverconfig/localizedrain/` | no (edit in game) | weather filters of the current save; copied from `global-filters.toml` when the save is created |
 
-On first launch of each save the mod copies the global `config/localizedrain/weather.toml` and `filters.toml` to that save's `<save>/serverconfig/localizedrain/` (existing files are never overwritten); edits stay independent from then on. A brand-new installation's first save may not have the global files yet: that session uses the built-in/global defaults and starts using the per-save copies from the next launch. Edit the per-save files to change an existing world. The legacy `config/localizedrain-common.toml` is split automatically on launch: weather/storm keys go to `weather.toml`, the three filter lists go to `filters.toml`, and debug keys go to `common.toml` (existing targets are skipped; the old file is kept as a backup). In existing saves a `weatherMode` that is still the default `PATCHES` is migrated once from the legacy file (a `.weatherMode-migrated` marker is written to the save directory, so setting it back to `PATCHES` later is respected); a mode you picked in a given save is never overwritten.
+The global files can be edited from the main menu (Mods → Localized Rain → Config); they define the starting values for **new worlds** and never touch existing saves. When a save is created, the mod copies `global-weather.toml` / `global-filters.toml` to `<save>/serverconfig/localizedrain/weather.toml` / `filters.toml`; edit the per-save copies in game (Server options) to change an existing world. The legacy `config/localizedrain-common.toml` is split automatically on launch: weather/storm keys go to `global-weather.toml`, the three filter lists go to `global-filters.toml`, and debug keys go to `common.toml` (existing targets are skipped; the old file is kept as a backup). In existing saves a `weatherMode` that is still the default `PATCHES` is migrated once from the legacy file (a `.weatherMode-migrated` marker is written to the save directory, so setting it back to `PATCHES` later is respected); a mode you picked in a given save is never overwritten.
 
 Main options (with defaults):
 
@@ -139,8 +141,8 @@ Main options (with defaults):
 | `maxColumnScansPerTick`          | `4`       | Maximum number of newly scanned columns per tick          |
 | `debugLogging`                   | `false`   | Emit patch scan / merge debug logging                      |
 | `logWeatherChanges`              | `false`   | Log biome patch weather changes with position and type    |
-| `logStormSpawns`                 | `true`    | Log detailed storm spawn parameters                       |
-| `logStormSpawnsToChat`           | `true`    | Report storm spawns in chat (center coordinates and type) |
+| `logStormSpawns`                 | `false`   | Log detailed storm spawn parameters (debug, off by default) |
+| `logStormSpawnsToChat`           | `false`   | Report storm spawns in chat (debug, off by default)       |
 
 ### Weather pacing (ticks)
 
@@ -172,6 +174,8 @@ Main options (with defaults):
 | `stormSyncIntervalTicks`                | `40`            | Storm snapshot correction interval                 |
 | `falloffRatio`                          | `0.3`           | Width ratio of the fading edge around a storm      |
 | `lightningMultiplier`                   | `1.0`           | Lightning probability multiplier; `0` disables     |
+| `stormRadiusBase`                       | `0.0`           | Base radius (blocks) for newly spawned storms; `0` = use the profile's own `radius` range |
+| `stormRadiusVariance`                   | `0.3`           | Random variation of the base radius (`0.3` = ±30%); only used when `stormRadiusBase > 0` |
 
 ## Compatibility
 
@@ -203,12 +207,12 @@ Main options (with defaults):
   ```
 
   `pos` is the patch center (quantized to 16 blocks horizontally), `patch` is the internal patch id, and `previous` is the previous `type|raining|thundering`.
-- `logStormSpawns` (on by default) controls the detailed storm spawn log line (dimension, id, profile, position, radius, vertical range, stage, type, intensity, velocity, manual flag and lifetime):
+- `logStormSpawns` (off by default) controls the detailed storm spawn log line (dimension, id, profile, position, radius, vertical range, stage, type, intensity, velocity, manual flag and lifetime):
 
   ```
   [localizedrain] storm spawned dim=minecraft:overworld id=... profile=localizedrain:thunderstorm x=120.5 z=-88.0 radius=269.0 vertical=SURFACE minY=48.0 maxY=320.0 stage=0/3 type=localizedrain:rain rain=0.52 thunder=0.0 velocity=0.0,0.0 manual=true lifetimeTicks=-1 stageTicks=5400.0
   ```
-- `logStormSpawnsToChat` (on by default) sends every player in the dimension a chat message whenever a storm spawns, with the center (x, z), Y range, radius and weather type; turn it off if you do not want the messages.
+- `logStormSpawnsToChat` (off by default) sends every player in the dimension a chat message whenever a storm spawns, with the center (x, z), Y range, radius and weather type; turn it off if you do not want the messages.
 
 ## Building
 

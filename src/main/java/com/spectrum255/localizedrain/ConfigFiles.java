@@ -35,14 +35,23 @@ public final class ConfigFiles {
     private static final String MOD_CONFIG_DIR = "localizedrain";
     private static final String LEGACY_FILE = "localizedrain-common.toml";
     /** 需要按存档独立的 SERVER 配置文件：全局文件只作为新建存档的默认值。 */
-    private static final String[] PER_WORLD_FILES = {"weather.toml", "filters.toml"};
+    /**
+     * 每存档配置：{全局默认文件（COMMON，主菜单可编辑）, 存档副本文件（SERVER）} 成对出现。
+     * 新建存档时把全局默认文件复制成存档副本。
+     */
+    private static final String[][] WORLD_CONFIG_FILES = {
+            {"global-weather.toml", "weather.toml"},
+            {"global-filters.toml", "filters.toml"}
+    };
     /** 已删除的配置键：旧文件里可能残留，留着会让用户误以为还能改（按文件名分组）。 */
     private static final Map<String, Set<String>> REMOVED_KEYS = removedKeys();
 
     /** 用有序映射定义，保证遍历（以及清理日志）的顺序稳定、可预期。 */
     private static Map<String, Set<String>> removedKeys() {
         Map<String, Set<String>> keys = new LinkedHashMap<>();
-        keys.put("weather.toml", Set.of("manualStormRadius"));
+        Set<String> weatherKeys = Set.of("manualStormRadius");
+        keys.put("weather.toml", weatherKeys);
+        keys.put("global-weather.toml", weatherKeys);
         return Collections.unmodifiableMap(keys);
     }
 
@@ -62,7 +71,8 @@ public final class ConfigFiles {
             "stormSpawnPlacement",
             "windChangeIntervalTicks", "windMinSpeed", "windMaxSpeed",
             "despawnDistance", "despawnGraceTicks",
-            "stormSyncIntervalTicks", "falloffRatio", "lightningMultiplier");
+            "stormSyncIntervalTicks", "falloffRatio", "lightningMultiplier",
+            "stormRadiusBase", "stormRadiusVariance");
     private static final List<String> FILTER_KEYS = List.of(
             "weatherBiomeWhitelist", "weatherBiomeBlacklist", "weatherBiomeOverrides");
     private static final List<String> COMMON_KEYS = List.of(
@@ -91,13 +101,13 @@ public final class ConfigFiles {
             return;
         }
         int migrated = 0;
-        migrated += writeIfMissing(configDir.resolve("weather.toml"), """
-                # Localized Rain — 天气与风暴设置（全局默认）
-                # 每个存档会在 <存档>/serverconfig/localizedrain/weather.toml 下有独立副本。
+        migrated += writeIfMissing(configDir.resolve("global-weather.toml"), """
+                # Localized Rain — 天气与风暴默认值（全局，主菜单可编辑）
+                # 新建存档时会复制成 <存档>/serverconfig/localizedrain/weather.toml。
                 """, WEATHER_KEYS, values);
-        migrated += writeIfMissing(configDir.resolve("filters.toml"), """
-                # Localized Rain — 天气过滤器（全局默认）
-                # 每个存档会在 <存档>/serverconfig/localizedrain/filters.toml 下有独立副本。
+        migrated += writeIfMissing(configDir.resolve("global-filters.toml"), """
+                # Localized Rain — 天气过滤器默认值（全局，主菜单可编辑）
+                # 新建存档时会复制成 <存档>/serverconfig/localizedrain/filters.toml。
                 """, FILTER_KEYS, values);
         migrated += writeIfMissing(configDir.resolve("common.toml"), """
                 # Localized Rain — 调试开关（所有存档共用）
@@ -109,9 +119,33 @@ public final class ConfigFiles {
             // 目标文件已存在（例如新版本首次启动时已生成默认值）：旧值不会自动覆盖，至少要把差异说清楚，
             // 避免「旧配置里的 weatherMode=mobile 被静默丢回 patches」。同一份旧文件只提示一次。
             if (legacyWarningDue(legacy, configDir, "global")) {
-                warnLegacyDifferences(configDir.resolve("weather.toml"), WEATHER_KEYS, values);
-                warnLegacyDifferences(configDir.resolve("filters.toml"), FILTER_KEYS, values);
+                warnLegacyDifferences(configDir.resolve("global-weather.toml"), WEATHER_KEYS, values);
+                warnLegacyDifferences(configDir.resolve("global-filters.toml"), FILTER_KEYS, values);
                 markLegacyWarning(legacy, configDir, "global");
+            }
+        }
+    }
+
+    /**
+     * 旧版本把「全局默认值」放在 {@code config/localizedrain/weather.toml} 与 {@code filters.toml}（SERVER）。
+     * 现在默认值单独放在 {@code global-weather.toml} / {@code global-filters.toml}（COMMON，主菜单可编辑），
+     * 新建存档时再复制成存档副本；升级时把旧全局文件复制成新的默认文件，保留用户已有设置。
+     * 必须在 COMMON 配置加载之前调用（Localizedrain 构造函数里）。
+     */
+    public static void migrateGlobalDefaults() {
+        Path directory = FMLPaths.CONFIGDIR.get().resolve(MOD_CONFIG_DIR);
+        for (String[] pair : WORLD_CONFIG_FILES) {
+            Path source = directory.resolve(pair[1]);
+            Path target = directory.resolve(pair[0]);
+            if (Files.exists(target) || Files.notExists(source)) {
+                continue;
+            }
+            try {
+                Files.copy(source, target);
+                Localizedrain.LOGGER.info("[localizedrain] migrated global defaults {} -> {}", source, target);
+            } catch (IOException exception) {
+                Localizedrain.LOGGER.warn("[localizedrain] could not migrate global defaults {} to {}",
+                        source, target, exception);
             }
         }
     }
@@ -327,8 +361,8 @@ public final class ConfigFiles {
      */
     public static int seedWorldConfigs(MinecraftServer server, boolean beforeConfigLoad) {
         int created = 0;
-        for (String fileName : PER_WORLD_FILES) {
-            if (seedFile(server, fileName)) {
+        for (String[] pair : WORLD_CONFIG_FILES) {
+            if (seedFile(server, pair[0], pair[1])) {
                 created++;
             }
         }
@@ -423,14 +457,14 @@ public final class ConfigFiles {
         }
     }
 
-    private static boolean seedFile(MinecraftServer server, String fileName) {
+    private static boolean seedFile(MinecraftServer server, String sourceName, String targetName) {
         try {
             Path directory = server.getWorldPath(new LevelResource("serverconfig")).resolve(MOD_CONFIG_DIR);
-            Path target = directory.resolve(fileName);
+            Path target = directory.resolve(targetName);
             if (Files.exists(target)) {
                 return false;
             }
-            Path source = FMLPaths.CONFIGDIR.get().resolve(MOD_CONFIG_DIR).resolve(fileName);
+            Path source = FMLPaths.CONFIGDIR.get().resolve(MOD_CONFIG_DIR).resolve(sourceName);
             if (!Files.exists(source)) {
                 return false;
             }
@@ -439,7 +473,7 @@ public final class ConfigFiles {
             Localizedrain.LOGGER.info("[localizedrain] created per-world config {}", target);
             return true;
         } catch (Exception exception) {
-            Localizedrain.LOGGER.warn("[localizedrain] failed to prepare per-world config {}", fileName, exception);
+            Localizedrain.LOGGER.warn("[localizedrain] failed to prepare per-world config {}", targetName, exception);
             return false;
         }
     }

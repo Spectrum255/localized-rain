@@ -401,6 +401,13 @@ public final class StormManager {
         }
         RandomSource random = level.getRandom();
         double radius = spec.radius().orElseGet(() -> {
+            double base = WindField.doubleConfig(Config.STORM_RADIUS_BASE, 0.0D);
+            if (base > 0.0D) {
+                double variance = Math.max(0.0D, Math.min(1.0D,
+                        WindField.doubleConfig(Config.STORM_RADIUS_VARIANCE, 0.3D)));
+                double factor = 1.0D + (random.nextDouble() * 2.0D - 1.0D) * variance;
+                return Math.max(16.0D, base * factor);
+            }
             StormProfile.Range range = profile.radius();
             return range.min() + random.nextDouble() * (range.max() - range.min());
         });

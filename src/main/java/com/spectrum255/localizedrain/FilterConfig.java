@@ -60,11 +60,11 @@ public final class FilterConfig {
 
     private FilterConfig() {}
 
-    private static boolean validBiomeWeatherEntry(Object entry) {
+    static boolean validBiomeWeatherEntry(Object entry) {
         return entry instanceof String value && parseWeatherEntry(value, true) != null;
     }
 
-    private static boolean validBiomeOverride(Object entry) {
+    static boolean validBiomeOverride(Object entry) {
         return entry instanceof String value && parseWeatherEntry(value, false) != null;
     }
 

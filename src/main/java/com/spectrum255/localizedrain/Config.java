@@ -99,14 +99,16 @@ public final class Config {
     /** 调试日志：风暴生成时的详细参数。 */
     public static final ModConfigSpec.BooleanValue LOG_STORM_SPAWNS =
             DEBUG_BUILDER.comment("Log a detailed line (dimension, id, profile, position, radius, vertical range,",
-                            "stage, weather type, intensity, velocity, manual flag and lifetime) whenever a storm spawns.")
-                    .define("logStormSpawns", true);
+                            "stage, weather type, intensity, velocity, manual flag and lifetime) whenever a storm spawns.",
+                            "Release default: off.")
+                    .define("logStormSpawns", false);
 
     /** 调试：风暴生成时在聊天栏向玩家报告中心坐标与类型。 */
     public static final ModConfigSpec.BooleanValue LOG_STORM_SPAWNS_TO_CHAT =
             DEBUG_BUILDER.comment("Report every storm spawn in the chat bar (center coordinates and weather type).",
-                            "Natural storms are infrequent, but disable this if you do not want the messages.")
-                    .define("logStormSpawnsToChat", true);
+                            "Natural storms are infrequent, but disable this if you do not want the messages.",
+                            "Release default: off.")
+                    .define("logStormSpawnsToChat", false);
 
     // 过滤规则（白名单 / 黑名单 / 强制天气）已拆分到 config/localizedrain/ 下的独立文件，
     // 见 FilterConfig：whitelist.toml、blacklist.toml、overrides.toml。
@@ -211,6 +213,22 @@ public final class Config {
     public static final ModConfigSpec.DoubleValue STORM_LIGHTNING_MULTIPLIER =
             WEATHER_BUILDER.comment("Lightning frequency multiplier for storms.")
                     .defineInRange("lightningMultiplier", 1.0D, 0.0D, 20.0D);
+
+    /**
+     * 生成风暴的基准半径（方块）。0 = 使用档案自带的 radius 区间。
+     * 大于 0 时以此为中心，按 {@link #STORM_RADIUS_VARIANCE} 做上下浮动。
+     */
+    public static final ModConfigSpec.DoubleValue STORM_RADIUS_BASE =
+            WEATHER_BUILDER.comment("Base radius for newly spawned storms, in blocks.",
+                            "0 = use the profile's radius range.",
+                            "When > 0, stormRadiusVariance is applied on top of this value.")
+                    .defineInRange("stormRadiusBase", 0.0D, 0.0D, 4096.0D);
+
+    /** 基准半径的浮动率：0.3 = 在基准 ±30% 范围内随机。仅在 {@link #STORM_RADIUS_BASE} > 0 时生效。 */
+    public static final ModConfigSpec.DoubleValue STORM_RADIUS_VARIANCE =
+            WEATHER_BUILDER.comment("Random variation applied to stormRadiusBase, as a fraction.",
+                            "0.3 = +/-30%. Only used when stormRadiusBase > 0.")
+                    .defineInRange("stormRadiusVariance", 0.3D, 0.0D, 1.0D);
 
     /** 全局（所有存档共用）的调试开关。 */
     static final ModConfigSpec COMMON_SPEC = DEBUG_BUILDER.build();

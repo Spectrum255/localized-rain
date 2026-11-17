@@ -50,10 +50,16 @@ public final class Localizedrain {
         }
         // 旧版单文件配置：按新文件拆分迁移（保留旧文件作为备份，不删除）
         ConfigFiles.migrateLegacyConfigs();
-        // common.toml 是所有存档共用的调试开关；weather.toml / filters.toml 是 SERVER 配置，
-        // 每个存档在 <world>/serverconfig/localizedrain/ 下独立，
-        // config/localizedrain/ 里的同名文件则作为新建存档的默认值来源。
+        // 旧版全局默认（SERVER 的 weather.toml/filters.toml）迁移成主菜单可编辑的 global-*.toml
+        ConfigFiles.migrateGlobalDefaults();
+        // common.toml / global-weather.toml / global-filters.toml 是 COMMON 配置：主菜单即可编辑，
+        // 其中后两者是新建存档的默认值。weather.toml / filters.toml 是 SERVER 配置：
+        // 每个存档在 <world>/serverconfig/localizedrain/ 下有独立副本（由 ConfigFiles 在启动前复制）。
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.COMMON_SPEC, "localizedrain/common.toml");
+        modContainer.registerConfig(ModConfig.Type.COMMON, GlobalWeatherConfig.SPEC,
+                "localizedrain/global-weather.toml");
+        modContainer.registerConfig(ModConfig.Type.COMMON, GlobalFilterConfig.SPEC,
+                "localizedrain/global-filters.toml");
         modContainer.registerConfig(ModConfig.Type.SERVER, Config.WEATHER_SPEC, "localizedrain/weather.toml");
         modContainer.registerConfig(ModConfig.Type.SERVER, FilterConfig.FILTERS_SPEC, "localizedrain/filters.toml");
         // 领域层不直接构造网络包：安装网络层实现
