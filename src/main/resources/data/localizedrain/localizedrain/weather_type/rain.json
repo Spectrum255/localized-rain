@@ -1,0 +1,6 @@
+{
+  "display_key": "weather.localizedrain.rain",
+  "has_precipitation": true,
+  "precipitation": "rain",
+  "allows_thunder": false
+}

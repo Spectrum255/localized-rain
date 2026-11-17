@@ -29,7 +29,7 @@ Minecraft 原版的天气总是随机触发且全局生效的，这不合理。�
 - 已加载区块的群系片会按 `weatherSimulationIntervalTicks`（默认 20 tick）成批推进，未加载区域的天气状态将被冻结。
 - 每个片有自己的晴天计时器、降雨计时器、雷暴延迟与雷暴计时，数值取自配置的 tick 区间。
 - 雨量与雷量按 0.01/tick 渐变，跨片切换时天空与雨声约 5 秒过渡，不会瞬间跳变。
-- 支持自定义天气类型：只有加入自然池标签 `#localizedrain:natural`，或被写进对应群系的白名单后，注册在 `localizedrain:weather_type` 里的类型才会参与自然循环（详见 API 部分）。
+- 支持自定义天气类型：类型以数据包 JSON 定义在 `localizedrain:weather_type`；只有加入自然池标签 `#localizedrain:natural`，或被写进对应群系的白名单后，该类型才会参与自然循环（详见 API 部分）。
 - 不降水的群系（下界、末地原版群系，或 `Biome#hasPrecipitation()==false` 的群系）默认持续处于晴天状态。
 
 ## 移动模式（`mobile`）
@@ -86,10 +86,41 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 ## 天气类型与扩展 API
 
-- 天气类型注册表：`localizedrain:weather_type`，内置 `clear` / `rain` / `thunder`，
-  其他模组可以注册自己的类型（`WeatherType` record）。
-- 判定与查询入口：`api.WeatherApi`，包括 `typeAt` / `patchAt` / `isRainingAt` / `isPrecipitatingAt` /
-  `isThunderingAt` / `thunderLevelAt` / `skyDarkenAt` / `patches` / `setWeather` / `setWeatherAt`。
+天气类型是**数据包注册表** `localizedrain:weather_type`，内置 `clear` / `rain` / `thunder` 三个类型
+（`data/localizedrain/localizedrain/weather_type/*.json`）。任何数据包都可以在
+`data/<命名空间>/localizedrain/weather_type/<id>.json` 新增类型：
+
+```json
+{
+  "display": "沙尘暴",
+  "display_key": "weather.mypack.sandstorm",
+  "has_precipitation": true,
+  "precipitation": "rain",
+  "allows_thunder": false,
+  "particle": "weatherplus:sandstorm",
+  "sound": "weatherplus:weather.sandstorm",
+  "extra": { "color": "#d8c080" }
+}
+```
+
+- `display` / `display_key`：显示名的纯文本或翻译键（`display` 优先；都没有时按 id 推导 `weather.<命名空间>.<路径>`）。
+- `has_precipitation` / `precipitation`（`none` / `rain` / `snow`）/ `allows_thunder`：判定用的能力位。
+- `particle` / `sound` / `extra`：**渲染提示，由制作方自行读取**。本模组不替自定义类型硬编码粒子与特殊效果，
+  只保证这些字段可读；自定义类型需要资源包读取它们（或由附属模组/资源包自行渲染）。
+
+自定义类型可以直接用于风暴阶段、黑白名单、强制天气、`/weather type` 与 `WeatherApi`。
+若还想让它参与**自然循环**，需要把它加入自然池标签 `data/<命名空间>/tags/localizedrain/weather_type/natural.json`
+（标签存在时以内为准），或写进对应群系的白名单。
+
+判定与查询入口：
+
+- `api.WeatherApi`：`typeAt` / `patchAt` / `isRainingAt` / `isPrecipitatingAt` / `isThunderingAt` /
+  `thunderLevelAt` / `skyDarkenAt` / `patches` / `setWeather` / `setWeatherAt`。
+- `api.WeatherTypes`：`resolve(level, id)` / `ids(level)` / `naturalIds(level)` / `tagIds(level, tag)`；
+  客户端同样可用（数据包注册表登录时同步）。
+- `api.WeatherType`：`displayName()` / `particle()` / `sound()` / `extra()` 等读取接口。
+- 客户端读取当前状态：`network.ClientWeatherTargets.typeKey()`（HUD 目标类型）、
+  `client.ClientStormCache.storms()`（当前风暴快照，含类型、位置、半径与强度）。
 - 风暴事件：`StormSpawnEvent`（可取消）、`StormStageChangeEvent`、`StormRemoveEvent`；
   生成入口 `StormManager` / `StormSpawnSpec`。
 
@@ -98,7 +129,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 1. 安装 Minecraft 1.21.1 对应的 NeoForge（21.1.265 或更高）。
 2. 服务器和客户端都需要安装本模组。
 
-> 客户端与服务端必须使用同一版本（网络协议 `"6"`）。版本不一致时连接不会断开，
+> 客户端与服务端必须使用同一版本（网络协议 `"7"`）。版本不一致时连接不会断开，
 > 但登录时会收到提示、服务端日志会记录警告，风暴/天气同步会静默失效。
 
 ## 快速上手

@@ -31,6 +31,8 @@ public class LocalizedrainClient {
         NeoForge.EVENT_BUS.addListener((ClientPlayerNetworkEvent.LoggingOut event) -> {
             ClientWeatherHooks.onLoggingOut();
             com.spectrum255.localizedrain.client.ClientStormCache.clear();
+            // 换服务器/重连后数据包注册表内容可能不同，清掉天气类型解析缓存
+            com.spectrum255.localizedrain.api.WeatherTypes.invalidate();
         });
         ClientWeatherHooks.tryInstallXaero();
     }

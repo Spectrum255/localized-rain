@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.WeatherMode;
+import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.network.LocalizedrainNetwork;
 import com.spectrum255.localizedrain.network.StormSyncBroadcaster;
@@ -64,14 +65,12 @@ public final class Localizedrain {
         modContainer.registerConfig(ModConfig.Type.SERVER, FilterConfig.FILTERS_SPEC, "localizedrain/filters.toml");
         // 领域层不直接构造网络包：安装网络层实现
         StormManager.setSyncSink(new StormSyncBroadcaster());
-        // 自定义注册表必须先创建，DeferredRegister 只会在 NewRegistryEvent 里注册已经创建好的表；
-        // 漏掉 makeRegistry 时编译能过，但运行期 localizedrain:weather_type 不存在。
-        WeatherTypes.REGISTRY.makeRegistry(builder -> {});
-        // 天气类型注册表（附属模组可以往 localizedrain:weather_type 里追加类型）
-        WeatherTypes.REGISTRY.register(modEventBus);
-        // 风暴档案是数据包注册表：内容来自 data/<ns>/storm_profile/<id>.json
-        modEventBus.addListener((net.neoforged.neoforge.registries.DataPackRegistryEvent.NewRegistry event) ->
-                event.dataPackRegistry(StormProfiles.REGISTRY_KEY, StormProfile.CODEC, StormProfile.CODEC));
+        // 天气类型与风暴档案都是数据包注册表：内容来自
+        // data/<ns>/localizedrain/weather_type/<id>.json 与 data/<ns>/localizedrain/storm_profile/<id>.json
+        modEventBus.addListener((net.neoforged.neoforge.registries.DataPackRegistryEvent.NewRegistry event) -> {
+            event.dataPackRegistry(WeatherTypes.REGISTRY_KEY, WeatherType.CODEC, WeatherType.CODEC);
+            event.dataPackRegistry(StormProfiles.REGISTRY_KEY, StormProfile.CODEC, StormProfile.CODEC);
+        });
         // 目标天气包：给 Xaero 天气行这类 HUD 提供即时值（客户端只拿平滑值）
         modEventBus.addListener(LocalizedrainNetwork::register);
         // 天气黑白名单依赖群系标签，配置重载和服务器启动（标签已绑定）时重建解析结果
@@ -111,6 +110,8 @@ public final class Localizedrain {
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.OnDatapackSyncEvent event) -> {
             // 该事件在 /reload 时 player 为 null；玩家登录也会触发一次，登录不需要重建档案缓存
             if (event.getPlayer() == null) {
+                // 天气类型与风暴档案都是数据包注册表：/reload 后内容会更换，缓存必须重建
+                WeatherTypes.invalidate();
                 StormManager.invalidateProfiles();
             }
         });

@@ -363,10 +363,10 @@ public final class StormManager {
             StormObject storm = dominantAt(level, player.blockPosition());
             StormSyncData.Hud hud;
             if (storm == null) {
-                hud = new StormSyncData.Hud(false, false, WeatherTypes.CLEAR.get().displayKey());
+                hud = new StormSyncData.Hud(false, false, WeatherTypes.byId(level, WeatherTypes.CLEAR_ID).displayKey());
             } else {
                 StormProfile profile = storm.resolveProfile(level);
-                WeatherType type = profile == null ? WeatherTypes.CLEAR.get()
+                WeatherType type = profile == null ? WeatherTypes.byId(level, WeatherTypes.CLEAR_ID)
                         : WeatherTypes.byId(level, storm.weatherType(profile));
                 hud = new StormSyncData.Hud(
                         type.hasPrecipitation() && storm.effectiveRain() > 0.2F,
@@ -727,10 +727,10 @@ public final class StormManager {
     public static WeatherType weatherTypeAt(ServerLevel level, BlockPos pos) {
         StormObject storm = dominantAt(level, pos);
         if (storm == null) {
-            return WeatherTypes.CLEAR.get();
+            return WeatherTypes.byId(level, WeatherTypes.CLEAR_ID);
         }
         StormProfile profile = storm.resolveProfile(level);
-        return profile == null ? WeatherTypes.CLEAR.get()
+        return profile == null ? WeatherTypes.byId(level, WeatherTypes.CLEAR_ID)
                 : WeatherTypes.byId(level, storm.weatherType(profile));
     }
 

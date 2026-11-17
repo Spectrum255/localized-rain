@@ -29,7 +29,7 @@ The three modes are mutually exclusive. Each keeps its own save data, and no sta
 - Biome patches in loaded chunks are advanced in batches every `weatherSimulationIntervalTicks` (20 ticks by default); weather in unloaded areas is frozen.
 - Each patch has its own clear timer, rain timer, thunder delay and thunder timer, with values drawn from the configured tick ranges.
 - Rain and thunder levels ease at 0.01/tick, so sky and rain sound transition over roughly 5 seconds when moving between patches instead of snapping.
-- Custom weather types are supported: a type registered in `localizedrain:weather_type` only joins natural cycling if it is added to the natural-pool tag `#localizedrain:natural`, or written into the whitelist of the corresponding biome (see the API section).
+- Custom weather types are supported as datapack entries in `localizedrain:weather_type`: a type only joins natural cycling if it is added to the natural-pool tag `#localizedrain:natural`, or written into the whitelist of the corresponding biome (see the API section).
 - Biomes without precipitation (vanilla Nether/End biomes, or any biome with `Biome#hasPrecipitation()==false`) stay clear by default.
 
 ## Mobile mode (`mobile`)
@@ -83,10 +83,41 @@ Whitelist/blacklist only constrain natural cycling; commands can still manually 
 
 ## Weather types and extension API
 
-- Weather type registry: `localizedrain:weather_type`, with built-in `clear` / `rain` / `thunder`;
-  other mods can register their own types (a `WeatherType` record).
-- Queries live in `api.WeatherApi`: `typeAt` / `patchAt` / `isRainingAt` / `isPrecipitatingAt` /
-  `isThunderingAt` / `thunderLevelAt` / `skyDarkenAt` / `patches` / `setWeather` / `setWeatherAt`.
+Weather types are a **datapack registry** `localizedrain:weather_type`, with built-in `clear` / `rain` / `thunder`
+(`data/localizedrain/localizedrain/weather_type/*.json`). Any datapack can add a type under
+`data/<namespace>/localizedrain/weather_type/<id>.json`:
+
+```json
+{
+  "display": "Sandstorm",
+  "display_key": "weather.mypack.sandstorm",
+  "has_precipitation": true,
+  "precipitation": "rain",
+  "allows_thunder": false,
+  "particle": "weatherplus:sandstorm",
+  "sound": "weatherplus:weather.sandstorm",
+  "extra": { "color": "#d8c080" }
+}
+```
+
+- `display` / `display_key`: literal name or translation key (`display` wins; if neither is present the key is
+  derived as `weather.<namespace>.<path>`).
+- `has_precipitation` / `precipitation` (`none` / `rain` / `snow`) / `allows_thunder`: capability flags.
+- `particle` / `sound` / `extra`: **render hints for creators**. This mod does not hardcode particles or special
+  effects for custom types; it only exposes these fields so packs/mods can render them themselves.
+
+Custom types can be used directly in storm stages, whitelist/blacklist, forced weather, `/weather type` and
+`WeatherApi`. To let a type join **natural cycling**, add it to the natural-pool tag
+`data/<namespace>/tags/localizedrain/weather_type/natural.json` (used when present) or to a biome whitelist.
+
+Queries and read APIs:
+
+- `api.WeatherApi`: `typeAt` / `patchAt` / `isRainingAt` / `isPrecipitatingAt` / `isThunderingAt` /
+  `thunderLevelAt` / `skyDarkenAt` / `patches` / `setWeather` / `setWeatherAt`.
+- `api.WeatherTypes`: `resolve(level, id)` / `ids(level)` / `naturalIds(level)` / `tagIds(level, tag)`; these work on
+  the client too (datapack registries are synced on login).
+- `api.WeatherType`: `displayName()` / `particle()` / `sound()` / `extra()`.
+- Client state: `network.ClientWeatherTargets.typeKey()` and `client.ClientStormCache.storms()`.
 - Storm events: `StormSpawnEvent` (cancellable), `StormStageChangeEvent`, `StormRemoveEvent`;
   spawning entry points are `StormManager` / `StormSpawnSpec`.
 
@@ -95,7 +126,7 @@ Whitelist/blacklist only constrain natural cycling; commands can still manually 
 1. Install NeoForge for Minecraft 1.21.1 (21.1.265 or newer).
 2. Install this mod on both the server and the client.
 
-> Client and server must run the same version (network protocol `"6"`). If they differ, the connection is not dropped,
+> Client and server must run the same version (network protocol `"7"`). If they differ, the connection is not dropped,
 > but you will be notified on login, the server log records a warning, and storm/weather sync silently does nothing.
 
 ## Quick start

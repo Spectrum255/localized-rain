@@ -685,9 +685,10 @@ public final class WeatherManager {
     /** 原版语义只有「下雨 / 雷暴 / 晴天」三态。 */
     private static WeatherType vanillaWeatherTypeAt(ServerLevel level, BlockPos pos) {
         if (level.isThundering() && vanillaRainingAt(level, pos)) {
-            return WeatherTypes.THUNDER.get();
+            return WeatherTypes.byId(level, WeatherTypes.THUNDER_ID);
         }
-        return level.isRaining() ? WeatherTypes.RAIN.get() : WeatherTypes.CLEAR.get();
+        return level.isRaining() ? WeatherTypes.byId(level, WeatherTypes.RAIN_ID)
+                : WeatherTypes.byId(level, WeatherTypes.CLEAR_ID);
     }
 
     private static WeatherType patchesWeatherTypeAt(ServerLevel level, BlockPos pos) {
@@ -696,7 +697,7 @@ public final class WeatherManager {
             // 与 HUD 发包使用同一条可计算的解析路径，避免附属模组在缓存冷启动时误判为晴天
             state = resolveState(level, pos);
         }
-        return state == null ? WeatherTypes.CLEAR.get() : WeatherTypes.byId(level, state.typeId());
+        return state == null ? WeatherTypes.byId(level, WeatherTypes.CLEAR_ID) : WeatherTypes.byId(level, state.typeId());
     }
 
     /**
