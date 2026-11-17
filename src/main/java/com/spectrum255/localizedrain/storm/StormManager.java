@@ -165,7 +165,7 @@ public final class StormManager {
                     storm.manual(), storm.dying(), storm.dyingTicksLeft));
         }
         return new StormSyncData(entries,
-                WindField.stringConfig(Config.ISOLATED_BIOME_WEATHER, "clear"),
+                Config.isolatedBiomeWeather().id(),
                 WindField.doubleConfig(Config.STORM_FALLOFF_RATIO, 0.3D),
                 com.spectrum255.localizedrain.api.WeatherMode.current()
                         == com.spectrum255.localizedrain.api.WeatherMode.MOBILE);
@@ -702,7 +702,7 @@ public final class StormManager {
         boolean manualOnly = false;
         if (isIsolatedAt(level, pos)) {
             // clear：绝对无天气；patch：由片天气机器接管；manual：只认手动风暴
-            String isolatedMode = WindField.stringConfig(Config.ISOLATED_BIOME_WEATHER, "clear");
+            String isolatedMode = Config.isolatedBiomeWeather().id();
             if (!"manual".equals(isolatedMode)) {
                 return null;
             }

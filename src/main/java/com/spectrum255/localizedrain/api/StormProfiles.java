@@ -63,7 +63,7 @@ public final class StormProfiles {
             // 内置新增预设默认关闭，但它们若只在无天光维度生成（skylight=forbidden），
             // 关掉会让下界自然风暴池变空；这类档案保留，主世界本来也看不到它们。
             if (!Config.builtinPresetsEnabled() && isPreset(holder.key().location())
-                    && profile.skylight() != StormProfile.SkylightMode.FORBIDDEN) {
+                    && profile.skylight() != SkylightMode.FORBIDDEN) {
                 continue;
             }
             if (tagged ? holder.is(NATURAL_TAG) : profile.natural()) {

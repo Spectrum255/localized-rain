@@ -3,6 +3,7 @@
   "has_precipitation": false,
   "precipitation": "none",
   "allows_thunder": false,
+  "skylight": "required",
   "particle": "minecraft:cloud",
   "particle_count": 40,
   "sound_interval_ticks": 0,

@@ -62,6 +62,7 @@ public final class WeatherBiomeFilter {
 
     /** 解析失败的天气类型/标签只警告一次，避免热路径刷日志。 */
     private static final Set<ResourceLocation> WARNED_TYPES = new HashSet<>();
+    private static final Set<ResourceLocation> WARNED_SKYLIGHT = new HashSet<>();
     private static final Set<ResourceLocation> WARNED_TAGS = new HashSet<>();
 
     private static volatile Snapshot snapshot;
@@ -197,8 +198,16 @@ public final class WeatherBiomeFilter {
                 }
             } else if (WeatherTypes.CLEAR_ID.equals(forcedId)) {
                 return HARD_LOCKED_CLEAR;
-            } else if (!type.requiresSkylight() || level.dimensionType().hasSkyLight()) {
-                return new Decision(new Forced(forcedId, type), List.of(), false, false);
+            } else {
+                boolean hasSkyLight = level.dimensionType().hasSkyLight();
+                if (type.skylight().allows(hasSkyLight) && (!type.requiresSkylight() || hasSkyLight)) {
+                    return new Decision(new Forced(forcedId, type), List.of(), false, false);
+                }
+                // 类型声明了天光要求：当前维度不允许时忽略这条强制规则，退回自然判定
+                if (WARNED_SKYLIGHT.add(forcedId)) {
+                    LOGGER.warn("Ignoring weather override '{}': the type is not allowed in this dimension by skylight",
+                            forcedId);
+                }
             }
         }
         Set<ResourceLocation> whitelist = current.whitelistTypes(biome);
@@ -232,8 +241,10 @@ public final class WeatherBiomeFilter {
             if (!explicit && !precipitates && (type.hasPrecipitation() || type.allowsThunder())) {
                 continue;
             }
-            if (type.requiresSkylight() && !level.dimensionType().hasSkyLight()) {
-                continue;                   // 声明了 requires_skylight 的类型不出现在无天光维度
+            boolean hasSkyLight = level.dimensionType().hasSkyLight();
+            if (!type.skylight().allows(hasSkyLight)
+                    || (type.requiresSkylight() && !hasSkyLight)) {
+                continue;                   // 声明了 skylight / requires_skylight 的类型不出现在不匹配的维度
             }
             result.add(new Candidate(id, type.hasPrecipitation(), type.allowsThunder(),
                     WeatherTypes.CLEAR_ID.equals(id)));

@@ -1,7 +1,9 @@
 package com.spectrum255.localizedrain;
 
+import com.electronwill.nightconfig.core.EnumGetMethod;
+import com.spectrum255.localizedrain.api.IsolatedBiomeWeather;
+import com.spectrum255.localizedrain.api.StormSpawnPlacement;
 import com.spectrum255.localizedrain.api.WeatherMode;
-import java.util.List;
 import net.minecraft.resources.ResourceLocation;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
@@ -11,13 +13,6 @@ public final class Config {
 
     /** 调试开关：COMMON 配置，所有存档共用（`config/localizedrain/common.toml`）。 */
     private static final ModConfigSpec.Builder DEBUG_BUILDER = new ModConfigSpec.Builder();
-
-    /**
-     * 合法取值。这里用 {@code define} + 显式判空，而不是 {@code defineInList}：
-     * NeoForge 校正旧配置文件时会用 {@code null} 调用校验器，而 {@code List.of(...).contains(null)}
-     * 会抛 NPE，导致「旧配置缺少新键」时游戏在加载配置阶段崩溃。
-     */
-    private static final List<String> ISOLATED_WEATHER_MODES = List.of("clear", "patch", "manual");
 
     public static final ModConfigSpec.IntValue MIN_CLEAR_TICKS = WEATHER_BUILDER.defineInRange("minClearTicks", 12000, 20, 720000);
     public static final ModConfigSpec.IntValue MAX_CLEAR_TICKS = WEATHER_BUILDER.defineInRange("maxClearTicks", 168000, 20, 720000);
@@ -131,13 +126,12 @@ public final class Config {
                             "Release default: off.")
                     .define("enableBuiltinPresets", false);
 
-    public static final ModConfigSpec.ConfigValue<String> ISOLATED_BIOME_WEATHER =
+    public static final ModConfigSpec.EnumValue<IsolatedBiomeWeather> ISOLATED_BIOME_WEATHER =
             WEATHER_BUILDER.comment("Weather inside biomes tagged #localizedrain:storm_isolated (mobile mode only).",
                             "clear  = always clear",
                             "patch  = keep running the biome-patch weather machine for those patches",
                             "manual = clear unless set by command/API")
-                    .define("isolatedBiomeWeather", "clear",
-                            value -> value instanceof String mode && ISOLATED_WEATHER_MODES.contains(mode));
+                    .defineEnum("isolatedBiomeWeather", IsolatedBiomeWeather.CLEAR, EnumGetMethod.NAME_IGNORECASE);
 
     public static final ModConfigSpec.BooleanValue NATURAL_CAVE_STORMS =
             WEATHER_BUILDER.comment("Allow storms to spawn naturally underground (mobile mode only).")
@@ -182,13 +176,11 @@ public final class Config {
                     .defineInRange("naturalStormSpawnChance", 0.035D, 0.0D, 1.0D);
 
     /** 自然风暴的生成位置策略：在玩家附近，或在任意已加载区块随机生成。 */
-    public static final ModConfigSpec.ConfigValue<String> STORM_SPAWN_PLACEMENT =
+    public static final ModConfigSpec.EnumValue<StormSpawnPlacement> STORM_SPAWN_PLACEMENT =
             WEATHER_BUILDER.comment("Where natural storms spawn.",
                             "near_player     = within the configured distance of a random player (respects the per-player cap)",
                             "anywhere_loaded = at a random loaded chunk (ignores the per-player cap)")
-                    .define("stormSpawnPlacement", "near_player",
-                            value -> value instanceof String placement
-                                    && ("near_player".equals(placement) || "anywhere_loaded".equals(placement)));
+                    .defineEnum("stormSpawnPlacement", StormSpawnPlacement.NEAR_PLAYER, EnumGetMethod.NAME_IGNORECASE);
 
     public static final ModConfigSpec.IntValue WIND_CHANGE_INTERVAL_TICKS =
             WEATHER_BUILDER.comment("How often (in ticks) the dimension wind direction is re-rolled.")
@@ -257,6 +249,24 @@ public final class Config {
             return ENABLE_BUILTIN_PRESETS.get();
         } catch (RuntimeException exception) {
             return false;
+        }
+    }
+
+    /** 隔离群系（{@code #localizedrain:storm_isolated}）的天气语义；配置尚未加载时回退晴天。 */
+    public static IsolatedBiomeWeather isolatedBiomeWeather() {
+        try {
+            return ISOLATED_BIOME_WEATHER.get();
+        } catch (RuntimeException exception) {
+            return IsolatedBiomeWeather.CLEAR;
+        }
+    }
+
+    /** 自然风暴的生成位置策略；配置尚未加载时回退玩家附近。 */
+    public static StormSpawnPlacement stormSpawnPlacement() {
+        try {
+            return STORM_SPAWN_PLACEMENT.get();
+        } catch (RuntimeException exception) {
+            return StormSpawnPlacement.NEAR_PLAYER;
         }
     }
 }

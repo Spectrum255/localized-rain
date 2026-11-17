@@ -3,6 +3,7 @@
   "has_precipitation": false,
   "precipitation": "none",
   "allows_thunder": false,
+  "skylight": "forbidden",
   "particle": "minecraft:soul",
   "sound": "minecraft:block.soul_sand.step",
   "particle_count": 70,

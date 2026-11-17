@@ -103,6 +103,7 @@ Besides `clear` / `rain` / `thunder`, the jar ships 9 extra weather types and th
 
 - These preset weathers **do not participate in natural generation by default**. To enable their natural spawning, set `enableBuiltinPresets` to `true` in `weather.toml` (or the global default file `global-weather.toml`).
 - Every preset weather has a storm profile with the same name. Once natural generation is enabled, mobile-mode natural storms draw from these profiles, while patch-mode weather types join biome weather cycling directly.
+- The preset types also carry `skylight`: snow/blizzard/sandstorm/fog/overcast only join natural cycling in skylit dimensions, while ashstorm/soulmist/voidstorm/voidhaze only join in no-skylight dimensions, so they never leak into Overworld patch weather.
 - How presets relate to datapacks (overriding, removing from the natural pool) is covered in "Custom datapacks → Presets and datapacks".
 
 ## Custom datapacks
@@ -181,6 +182,10 @@ Weather types are the datapack registry `localizedrain:weather_type`, with built
   dominant storm**; leaving the area restores speed and resets the damage timer, and switching modes never leaves stacked modifiers.
 - `requires_skylight` (default `false`): when `true` the type only appears in **skylit** dimensions (natural pools and
   forced weather skip it); in no-skylight dimensions it can still be set explicitly with `/weather type`.
+  Legacy field, equivalent to `skylight: required`.
+- `skylight` (default `any`): `any` / `required` (skylit dimensions only) / `forbidden` (no-skylight dimensions only).
+  Natural pools, whitelists and forced weather all filter by the current dimension; the built-in presets use it to keep
+  Nether/End weather out of the Overworld.
 - `extra`: free-form JSON kept as-is.
 
 Custom types can be used directly in storm stages, whitelist/blacklist, forced weather, `/weather type` and `WeatherApi`.

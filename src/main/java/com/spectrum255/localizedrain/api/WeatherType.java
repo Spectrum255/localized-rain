@@ -49,7 +49,8 @@ public record WeatherType(
         Visuals visuals,
         Effects effects,
         CompoundTag extra,
-        boolean requiresSkylight
+        boolean requiresSkylight,
+        SkylightMode skylight
 ) {
     public static final int DEFAULT_PARTICLE_COUNT = 80;
     public static final int DEFAULT_SOUND_INTERVAL_TICKS = 40;
@@ -79,7 +80,8 @@ public record WeatherType(
             Visuals.CODEC.optionalFieldOf("visuals", Visuals.EMPTY).forGetter(WeatherType::visuals),
             Effects.CODEC.optionalFieldOf("effects", Effects.EMPTY).forGetter(WeatherType::effects),
             CompoundTag.CODEC.optionalFieldOf("extra", new CompoundTag()).forGetter(WeatherType::extra),
-            Codec.BOOL.optionalFieldOf("requires_skylight", false).forGetter(WeatherType::requiresSkylight)
+            Codec.BOOL.optionalFieldOf("requires_skylight", false).forGetter(WeatherType::requiresSkylight),
+            SkylightMode.CODEC.optionalFieldOf("skylight", SkylightMode.ANY).forGetter(WeatherType::skylight)
     ).apply(instance, WeatherType::new));
 
     /** 兼容旧构造：没有显示名、渲染提示与玩法效果的内置类型。 */
@@ -87,7 +89,7 @@ public record WeatherType(
                        boolean allowsThunder) {
         this(displayKey, Optional.empty(), hasPrecipitation, precipitation, allowsThunder,
                 Optional.empty(), Optional.empty(), DEFAULT_PARTICLE_COUNT, DEFAULT_SOUND_INTERVAL_TICKS,
-                Visuals.EMPTY, Effects.EMPTY, new CompoundTag(), false);
+                Visuals.EMPTY, Effects.EMPTY, new CompoundTag(), false, SkylightMode.ANY);
     }
 
     /** 显示名：优先使用数据包里的纯文本，否则走翻译键。 */
@@ -103,7 +105,7 @@ public record WeatherType(
         return new WeatherType("weather." + id.getNamespace() + "." + id.getPath(), this.display,
                 this.hasPrecipitation, this.precipitation, this.allowsThunder,
                 this.particle, this.sound, this.particleCount, this.soundIntervalTicks,
-                this.visuals, this.effects, this.extra, this.requiresSkylight);
+                this.visuals, this.effects, this.extra, this.requiresSkylight, this.skylight);
     }
 
     /** 客户端雾效提示；全部缺省时沿用原版雾。 */

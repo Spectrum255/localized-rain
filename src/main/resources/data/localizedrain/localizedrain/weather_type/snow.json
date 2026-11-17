@@ -3,6 +3,7 @@
   "has_precipitation": true,
   "precipitation": "snow",
   "allows_thunder": false,
+  "skylight": "required",
   "particle": "minecraft:snowflake",
   "sound": "minecraft:weather.rain",
   "particle_count": 60,

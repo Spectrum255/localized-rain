@@ -102,6 +102,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 - 这些预设天气**默认不参与自然生成**，如果想要开启它们的自然刷新，需要将`weather.toml`（或全局默认文件 `global-weather.toml`）里的 `enableBuiltinPresets` 设为true。
 - 每个预设天气都有同名的风暴档案。开启自然生成后，移动模式的自然风暴会抽取这些档案，群系片模式的天气类型则直接参与生物群系的天气循环。
+- 预设类型本身带 `skylight`：降雪/暴风雪/沙尘暴/浓雾/阴天只在有天光维度参与自然循环，灰烬风暴/灵魂薄雾/虚空风暴/虚空霾只在无天光维度参与，因此它们不会串到主世界的群系片天气里。
 - 预设与数据包的关系（覆盖、移出自然池）见「自定义数据包 → 预设与数据包」。
 
 ## 自定义数据包
@@ -177,7 +178,9 @@ config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_typ
   片模式对位于该天气片内的玩家生效；移动模式对**被主导风暴覆盖**的玩家生效；
   离开范围后移速与伤害计时自动复位，模式切换时不会残留叠加。
 - `requires_skylight`（默认 `false`）：为 `true` 时该类型只出现在**有天光**的维度（自然池与强制天气都会跳过它）；
-  无天光维度里仍可用 `/weather type` 显式设置。
+  无天光维度里仍可用 `/weather type` 显式设置。旧字段，等价于 `skylight: required`。
+- `skylight`（默认 `any`）：`any` / `required`（只有天光维度）/ `forbidden`（只有无天光维度）。
+  自然池、白名单和强制天气都会按当前维度过滤；本模组的预设用它把下界/末地天气挡在主世界之外。
 - `extra`：自由 JSON，模组原样保留、不解释。
 
 自定义类型可以直接用于风暴阶段、黑白名单、强制天气、`/weather type` 与 `WeatherApi`。

@@ -1,7 +1,9 @@
 package com.spectrum255.localizedrain;
 
+import com.electronwill.nightconfig.core.EnumGetMethod;
+import com.spectrum255.localizedrain.api.IsolatedBiomeWeather;
+import com.spectrum255.localizedrain.api.StormSpawnPlacement;
 import com.spectrum255.localizedrain.api.WeatherMode;
-import java.util.List;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
@@ -16,9 +18,6 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  */
 public final class GlobalWeatherConfig {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
-
-    private static final List<String> ISOLATED_WEATHER_MODES = List.of("clear", "patch", "manual");
-    private static final List<String> SPAWN_PLACEMENTS = List.of("near_player", "anywhere_loaded");
 
     /** 与 {@link Config} 天气键一一对应的全局默认值。 */
     static final ModConfigSpec SPEC;
@@ -43,8 +42,7 @@ public final class GlobalWeatherConfig {
         // 模式与过滤器相关
         BUILDER.defineEnum("weatherMode", WeatherMode.MOBILE);
         BUILDER.define("enableBuiltinPresets", false);
-        BUILDER.define("isolatedBiomeWeather", "clear",
-                value -> value instanceof String mode && ISOLATED_WEATHER_MODES.contains(mode));
+        BUILDER.defineEnum("isolatedBiomeWeather", IsolatedBiomeWeather.CLEAR, EnumGetMethod.NAME_IGNORECASE);
 
         // 移动风暴
         BUILDER.define("naturalCaveStorms", false);
@@ -56,8 +54,7 @@ public final class GlobalWeatherConfig {
         BUILDER.defineInRange("spawnMinDistance", 300, 32, 4096);
         BUILDER.defineInRange("spawnMaxDistance", 700, 32, 8192);
         BUILDER.defineInRange("naturalStormSpawnChance", 0.035D, 0.0D, 1.0D);
-        BUILDER.define("stormSpawnPlacement", "near_player",
-                value -> value instanceof String placement && SPAWN_PLACEMENTS.contains(placement));
+        BUILDER.defineEnum("stormSpawnPlacement", StormSpawnPlacement.NEAR_PLAYER, EnumGetMethod.NAME_IGNORECASE);
         BUILDER.defineInRange("windChangeIntervalTicks", 1200, 20, 240000);
         BUILDER.defineInRange("windMinSpeed", 0.02D, 0.0D, 1.0D);
         BUILDER.defineInRange("windMaxSpeed", 0.08D, 0.0D, 1.0D);

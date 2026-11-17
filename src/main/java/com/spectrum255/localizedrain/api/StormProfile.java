@@ -104,33 +104,7 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
         ).apply(instance, Environment::new));
     }
 
-    /** 维度的天光要求，与 {@code dimensions} 列表叠加生效。 */
-    public enum SkylightMode implements StringRepresentable {
-        ANY("any"), REQUIRED("required"), FORBIDDEN("forbidden");
-
-        /** 容错版：未知值回退 {@link #ANY}，避免一个笔误中止整个世界加载。 */
-        public static final Codec<SkylightMode> CODEC = Codec.STRING.comapFlatMap(
-                value -> {
-                    for (SkylightMode mode : values()) {
-                        if (mode.name.equalsIgnoreCase(value)) {
-                            return DataResult.success(mode);
-                        }
-                    }
-                    Localizedrain.LOGGER.warn("[localizedrain] unknown storm skylight mode '{}', using any", value);
-                    return DataResult.success(ANY);
-                },
-                SkylightMode::getSerializedName);
-        private final String name;
-
-        SkylightMode(String name) {
-            this.name = name;
-        }
-
-        @Override
-        public String getSerializedName() {
-            return this.name;
-        }
-    }
+    /** 维度的天光要求，与 {@code dimensions} 列表叠加生效；定义见 {@link SkylightMode}。 */
 
     private static final Codec<StormProfile> RECORD_CODEC = RecordCodecBuilder.create(instance -> instance.group(
             Codec.INT.optionalFieldOf("weight", 10).forGetter(StormProfile::weight),

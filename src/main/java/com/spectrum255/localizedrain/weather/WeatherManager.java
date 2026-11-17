@@ -124,7 +124,7 @@ public final class WeatherManager {
 
     /** 移动天气：风暴为主；isolatedBiomeWeather=patch 时隔离群系的片仍由片机器推进。 */
     private static void tickMobile(ServerLevel level) {
-        String isolatedMode = WindField.stringConfig(Config.ISOLATED_BIOME_WEATHER, "clear");
+        String isolatedMode = Config.isolatedBiomeWeather().id();
         if ("patch".equals(isolatedMode)) {
             tickIsolatedPatches(level);
         }

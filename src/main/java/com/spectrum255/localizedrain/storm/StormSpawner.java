@@ -68,8 +68,8 @@ final class StormSpawner {
             return;
         }
 
-        boolean anywhere = "anywhere_loaded".equals(
-                WindField.stringConfig(Config.STORM_SPAWN_PLACEMENT, "near_player"));
+        boolean anywhere = Config.stormSpawnPlacement()
+                == com.spectrum255.localizedrain.api.StormSpawnPlacement.ANYWHERE_LOADED;
         double x;
         double z;
         BlockPos probe;

@@ -5,6 +5,13 @@
     "localizedrain:rain",
     "localizedrain:thunder",
     "localizedrain:snow",
-    "localizedrain:blizzard"
+    "localizedrain:blizzard",
+    "localizedrain:sandstorm",
+    "localizedrain:fog",
+    "localizedrain:overcast",
+    "localizedrain:ashstorm",
+    "localizedrain:soulmist",
+    "localizedrain:voidstorm",
+    "localizedrain:voidhaze"
   ]
 }

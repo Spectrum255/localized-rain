@@ -121,7 +121,7 @@ public final class WeatherTypes {
             return new WeatherType(type.displayKey(), type.display(),
                     false, Biome.Precipitation.NONE, false,
                     type.particle(), type.sound(), type.particleCount(), type.soundIntervalTicks(),
-                    type.visuals(), type.effects(), type.extra(), type.requiresSkylight());
+                    type.visuals(), type.effects(), type.extra(), type.requiresSkylight(), type.skylight());
         }
         return type;
     }

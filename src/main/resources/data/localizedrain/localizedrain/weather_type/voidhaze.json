@@ -3,6 +3,7 @@
   "has_precipitation": false,
   "precipitation": "none",
   "allows_thunder": false,
+  "skylight": "forbidden",
   "particle": "minecraft:portal",
   "particle_count": 50,
   "sound_interval_ticks": 0,

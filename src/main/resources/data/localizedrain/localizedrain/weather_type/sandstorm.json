@@ -3,6 +3,7 @@
   "has_precipitation": false,
   "precipitation": "none",
   "allows_thunder": false,
+  "skylight": "required",
   "particle": "minecraft:white_ash",
   "sound": "minecraft:block.sand.break",
   "particle_count": 140,
