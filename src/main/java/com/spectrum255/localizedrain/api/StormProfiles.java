@@ -3,6 +3,7 @@ package com.spectrum255.localizedrain.api;
 import com.spectrum255.localizedrain.Localizedrain;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Predicate;
 import net.minecraft.core.Holder;
@@ -10,6 +11,7 @@ import net.minecraft.core.Registry;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.tags.TagKey;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
 
@@ -18,6 +20,13 @@ public final class StormProfiles {
     public static final ResourceKey<Registry<StormProfile>> REGISTRY_KEY =
             ResourceKey.createRegistryKey(ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "storm_profile"));
 
+    /**
+     * 自然生成池标签：`data/<命名空间>/tags/localizedrain/storm_profile/natural.json`。
+     * 标签存在（且非空）时以标签成员为准，否则回退到档案里的 {@code "natural": true}。
+     */
+    public static final TagKey<StormProfile> NATURAL_TAG =
+            TagKey.create(REGISTRY_KEY, ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "natural"));
+
     private StormProfiles() {}
 
     public static Optional<Holder.Reference<StormProfile>> byId(Level level, ResourceLocation id) {
@@ -25,19 +34,45 @@ public final class StormProfiles {
         return registry == null ? Optional.empty() : registry.getHolder(id);
     }
 
-    /** natural=true 的档案，按注册顺序。 */
+    /** 自然生成池：优先使用 {@link #NATURAL_TAG} 标签成员，否则回退到 {@code natural=true} 的档案。 */
     public static List<Holder.Reference<StormProfile>> naturalPool(Level level) {
         Registry<StormProfile> registry = level.registryAccess().registry(REGISTRY_KEY).orElse(null);
         if (registry == null) {
             return List.of();
         }
+        boolean tagged = registry.getTag(NATURAL_TAG).map(set -> set.size() > 0).orElse(false);
         List<Holder.Reference<StormProfile>> pool = new ArrayList<>();
         for (Holder.Reference<StormProfile> holder : registry.holders().toList()) {
-            if (holder.value().natural()) {
+            if (tagged ? holder.is(NATURAL_TAG) : holder.value().natural()) {
                 pool.add(holder);
             }
         }
         return pool;
+    }
+
+    /** 某个风暴档案所属的标签 id 列表（读档时由数据包决定，可用于自定义生成逻辑）。 */
+    public static List<ResourceLocation> tagIds(Level level, ResourceLocation profileId) {
+        Registry<StormProfile> registry = level.registryAccess().registry(REGISTRY_KEY).orElse(null);
+        if (registry == null) {
+            return List.of();
+        }
+        return registry.getHolder(profileId)
+                .map(holder -> holder.tags().map(TagKey::location).toList())
+                .orElse(List.of());
+    }
+
+    /** 某个标签下的风暴档案 id 列表。 */
+    public static List<ResourceLocation> idsInTag(Level level, TagKey<StormProfile> tag) {
+        Registry<StormProfile> registry = level.registryAccess().registry(REGISTRY_KEY).orElse(null);
+        if (registry == null) {
+            return List.of();
+        }
+        return registry.getTag(tag)
+                .map(set -> set.stream()
+                        .map(holder -> holder.unwrapKey().map(key -> key.location()).orElse(null))
+                        .filter(Objects::nonNull)
+                        .toList())
+                .orElse(List.of());
     }
 
     public static List<ResourceLocation> ids(Level level) {

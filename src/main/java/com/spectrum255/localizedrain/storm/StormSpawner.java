@@ -18,6 +18,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 
@@ -145,10 +146,11 @@ final class StormSpawner {
         Holder.Reference<StormProfile> holder;
         if (band != null) {
             // 洞穴风暴只接受降雨档案：BAND 落雷要求落点见天，雷暴档案在洞里永远不落雷
-            holder = StormProfiles.randomNatural(level, random,
-                    profile -> WeatherTypes.RAIN_ID.equals(profile.stage(0).type())).orElse(null);
-            if (holder == null || !filterAllows(level, probe, holder.value())) {
-                debugSpawn("no cave-capable profile or filter rejected");
+            holder = StormProfiles.randomNatural(level, random, profile ->
+                    WeatherTypes.RAIN_ID.equals(profile.stage(0).type())
+                            && spawnAllowed(level, probe, profile)).orElse(null);
+            if (holder == null) {
+                debugSpawn("no cave-capable profile passes biome/type filter");
                 return;
             }
             int radius = WindField.intConfig(Config.CAVE_STORM_RADIUS, 64);
@@ -162,13 +164,10 @@ final class StormSpawner {
             }
             return;
         }
-        holder = StormProfiles.randomNatural(level, random).orElse(null);
+        holder = StormProfiles.randomNatural(level, random,
+                profile -> spawnAllowed(level, probe, profile)).orElse(null);
         if (holder == null) {
-            debugSpawn("no natural profile available");
-            return;
-        }
-        if (!filterAllows(level, probe, holder.value())) {
-            debugSpawn("filter rejected the spawn probe");
+            debugSpawn("no natural profile passes biome/type filter");
             return;
         }
         if (StormManager.spawn(level, StormSpawnSpec
@@ -191,7 +190,21 @@ final class StormSpawner {
     }
 
     /**
-     * 生成点过滤器：只约束生成中心，不拦截后续移动（设计 §7.2）。
+     * 位置相关的完整生成过滤：档案允许的生物群系 + 天气类型/白黑名单。
+     *
+     * <p>把过滤放进加权抽取的候选集合里，避免先抽到一个注定被拒绝的档案再浪费这次尝试。</p>
+     */
+    private static boolean spawnAllowed(ServerLevel level, BlockPos pos, StormProfile profile) {
+        return biomeAllows(level, pos, profile) && filterAllows(level, pos, profile);
+    }
+
+    /** 档案的 {@code biomes} 列表优先；未写时走默认筛选（会下雨的 SURFACE 风暴只落在会降水的群系）。 */
+    private static boolean biomeAllows(ServerLevel level, BlockPos pos, StormProfile profile) {
+        Holder<Biome> biome = level.getBiome(pos);
+        return profile.restrictsBiomes() ? profile.allowsBiome(biome) : profile.defaultBiomeAllowed(biome);
+    }
+
+    /** 生成点过滤器：只约束生成中心，不拦截后续移动（设计 §7.2）。
      *
      * <p>白名单/黑名单按档案的初始阶段类型判定（避免多阶段档案用后续阶段绕过按类型过滤）；
      * 强制天气按任意阶段匹配（雷暴档案的初始阶段也是雨）。</p>

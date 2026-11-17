@@ -7,13 +7,16 @@ import com.spectrum255.localizedrain.Localizedrain;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import net.minecraft.core.Holder;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.StringRepresentable;
+import net.minecraft.world.level.biome.Biome;
 
-/** 数据驱动风暴档案：形状、阶段序列与环境调制参数。JSON 路径 data/<ns>/storm_profile/<id>.json。 */
+/** 数据驱动风暴档案：形状、阶段序列、环境调制参数与允许生成的生物群系。JSON 路径 data/<ns>/localizedrain/storm_profile/<id>.json。 */
 public record StormProfile(int weight, boolean natural, double speedMultiplier, Range radius,
-                           VerticalMode vertical, List<Stage> stages, Environment environment) {
+                           VerticalMode vertical, List<Stage> stages, Environment environment,
+                           List<StormBiomeSelector> biomes) {
 
     /** 竖直判定模式。 */
     public enum VerticalMode implements StringRepresentable {
@@ -107,7 +110,9 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
             VerticalMode.TOLERANT_CODEC.optionalFieldOf("vertical", VerticalMode.SURFACE).forGetter(StormProfile::vertical),
             Stage.CODEC.listOf().optionalFieldOf("stages", List.of()).forGetter(StormProfile::stages),
             Environment.CODEC.optionalFieldOf("environment", new Environment(true, 0.002D, 0.001D))
-                    .forGetter(StormProfile::environment)
+                    .forGetter(StormProfile::environment),
+            StormBiomeSelector.CODEC.listOf().optionalFieldOf("biomes", List.of())
+                    .forGetter(StormProfile::biomes)
     ).apply(instance, StormProfile::new));
 
     /**
@@ -143,8 +148,23 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
         double maxRadius = Math.max(minRadius, highRadius);
         int weight = Math.max(1, profile.weight());
         double speed = Math.max(0.01D, profile.speedMultiplier());
+        List<StormBiomeSelector> biomes = new ArrayList<>(profile.biomes().size());
+        boolean invalidBiome = false;
+        for (StormBiomeSelector selector : profile.biomes()) {
+            if (selector.kind() == StormBiomeSelector.Kind.INVALID) {
+                invalidBiome = true;     // 非法写法读档时丢弃，避免一个笔误中止整个世界加载
+                continue;
+            }
+            if (!biomes.contains(selector)) {
+                biomes.add(selector);
+            }
+        }
         StormProfile result = new StormProfile(weight, profile.natural(), speed,
-                new Range(minRadius, maxRadius), profile.vertical(), List.copyOf(stages), profile.environment());
+                new Range(minRadius, maxRadius), profile.vertical(), List.copyOf(stages), profile.environment(),
+                List.copyOf(biomes));
+        if (invalidBiome) {
+            Localizedrain.LOGGER.warn("[localizedrain] storm profile has invalid biomes selectors; ignored them");
+        }
         if (!result.equals(profile)) {
             if (emptyStages) {
                 Localizedrain.LOGGER.warn("[localizedrain] storm profile has no stages; added a default rain stage");
@@ -165,6 +185,40 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
             }
         }
         return false;
+    }
+
+    /** 是否显式声明了允许生成的生物群系列表。 */
+    public boolean restrictsBiomes() {
+        return !this.biomes.isEmpty();
+    }
+
+    /** 显式 biomes 列表是否允许该群系；列表为空时返回 true（交给默认筛选）。 */
+    public boolean allowsBiome(Holder<Biome> biome) {
+        if (this.biomes.isEmpty()) {
+            return true;
+        }
+        for (StormBiomeSelector selector : this.biomes) {
+            if (selector.test(biome)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 没有显式 biomes 时使用的默认生物群系筛选：会下雨的 {@link VerticalMode#SURFACE} 风暴
+     * 只落在会降水的群系里；洞穴/整列档案不受此限制。
+     */
+    public boolean defaultBiomeAllowed(Holder<Biome> biome) {
+        if (this.vertical != VerticalMode.SURFACE) {
+            return true;
+        }
+        for (Stage stage : this.stages) {
+            if (stage.rain().max() > 0.0D) {
+                return biome.value().hasPrecipitation();
+            }
+        }
+        return true;
     }
 
     /** 两个端点各自夹到 [low, high]，保留顺序（min &gt; max 表示递减）。 */

@@ -43,6 +43,12 @@ Minecraft 原版的天气总是随机触发且全局生效的，这不合理。�
   也作为目录前缀，所以路径里会出现两次 `localizedrain`；文件的命名空间就是档案 id 的命名空间。
 - 这些参数分别描述生成权重、是否自然生成、移动速度倍率、半径、竖直模式（`SURFACE` / `BAND` / `COLUMN`），
   以及阶段类型、雨/雷强度、阶段时长与环境演化参数。
+- 风暴档案可以写 `"biomes": []` 限定生成群系，条目支持生物群系标签（`#minecraft:is_taiga`）、单个群系
+  （`minecraft:desert`）与整个命名空间（`minecraft:*`）。不写时走默认筛选：会下雨的 `SURFACE` 档案只落在
+  会降水的群系；显式写列表则完全以列表为准（例如沙尘暴可以写沙漠）。洞穴/整列档案不受默认降水限制。
+- 风暴档案也可以打标签：`data/<命名空间>/tags/localizedrain/storm_profile/<tag>.json`。模组内置
+  `#localizedrain:natural` 标签作为自然生成池：标签存在（且非空）时以标签成员为准，不存在时回退到档案里的
+  `"natural": true`。API 可读取：`StormProfiles.idsInTag(level, tag)`、`StormProfiles.tagIds(level, profileId)`。
 - 每个维度有一套风场，风场方向每隔 `windChangeIntervalTicks` 做一次有界随机浮动。
 - 水分与温度决定风暴推进速度、是否提前进入下一阶段或消亡；自然生成遵守天气过滤器：不会产生某类天气的群系不会生成该类型的风暴，但已经生成的风暴飘过被过滤的群系时不受影响。
 - 客户端由完整快照驱动（每 `stormSyncIntervalTicks` 校正一次，生成/移除/换阶段立即推送）；
