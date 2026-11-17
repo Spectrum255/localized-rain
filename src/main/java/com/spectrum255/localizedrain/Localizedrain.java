@@ -112,7 +112,10 @@ public final class Localizedrain {
             if (event.getPlayer() == null) {
                 // 天气类型与风暴档案都是数据包注册表：/reload 后内容会更换，缓存必须重建
                 WeatherTypes.invalidate();
+                WeatherBiomeFilter.invalidate();
                 StormManager.invalidateProfiles();
+                // 已有片状态与风暴按新定义重算派生能力位（不改变类型 ID、计时器与归属）
+                WeatherManager.refreshAfterDatapackReload(event.getPlayerList().getServer());
             }
         });
         NeoForge.EVENT_BUS.addListener(LocalizedWeatherCommand::register);

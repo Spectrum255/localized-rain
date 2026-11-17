@@ -4,10 +4,6 @@
     "localizedrain:drizzle",
     "localizedrain:shower",
     "localizedrain:thunderstorm",
-    "localizedrain:squall",
-    "weatherplus:blizzard",
-    "weatherplus:fog",
-    "weatherplus:overcast",
-    "weatherplus:sandstorm"
+    "localizedrain:squall"
   ]
 }

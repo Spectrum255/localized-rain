@@ -6,6 +6,7 @@ import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSpawnSpec;
 import com.spectrum255.localizedrain.api.WeatherMode;
+import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import com.spectrum255.localizedrain.weather.LoadedChunks;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
@@ -135,20 +136,25 @@ final class StormSpawner {
             debugSpawn("spawn probe chunk is not loaded");
             return;
         }
-        if (StormManager.isIsolatedAt(level, probe)) {
-            debugSpawn("spawn probe is in an isolated biome");
-            return;                                     // 隔离群系是绝对生成禁区
-        }
         int surfaceY = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, probe).getY();
 
         boolean cave = WindField.boolConfig(Config.NATURAL_CAVE_STORMS, false) && random.nextFloat() < 0.4F;
         double[] band = cave ? findCaveBand(level, probe.getX(), probe.getZ(), surfaceY) : null;
+        // 群系/隔离/过滤器必须按最终生成点采样：SURFACE 用地表、BAND 用带中心。
+        // anywhere_loaded 选点时用的最低建筑高度探针只负责判断区块是否已加载。
+        BlockPos sampleProbe = band != null
+                ? new BlockPos(probe.getX(), (int) Math.round((band[0] + band[1]) * 0.5D), probe.getZ())
+                : new BlockPos(probe.getX(), surfaceY, probe.getZ());
+        if (StormManager.isIsolatedAt(level, sampleProbe)) {
+            debugSpawn("spawn probe is in an isolated biome");
+            return;
+        }
         Holder.Reference<StormProfile> holder;
         if (band != null) {
-            // 洞穴风暴只接受降雨档案：BAND 落雷要求落点见天，雷暴档案在洞里永远不落雷
-            holder = StormProfiles.randomNatural(level, random, profile ->
-                    WeatherTypes.RAIN_ID.equals(profile.stage(0).type())
-                            && spawnAllowed(level, probe, profile)).orElse(null);
+            // 洞穴风暴只接受「会降水、且不会打雷」的类型：BAND 落雷要求落点见天，雷暴在洞里永远不落雷
+            holder = StormProfiles.randomNatural(level, random,
+                    profile -> isCaveCapable(level, profile)
+                            && spawnAllowed(level, sampleProbe, profile)).orElse(null);
             if (holder == null) {
                 debugSpawn("no cave-capable profile passes biome/type filter");
                 return;
@@ -165,7 +171,7 @@ final class StormSpawner {
             return;
         }
         holder = StormProfiles.randomNatural(level, random,
-                profile -> spawnAllowed(level, probe, profile)).orElse(null);
+                profile -> spawnAllowed(level, sampleProbe, profile)).orElse(null);
         if (holder == null) {
             debugSpawn("no natural profile passes biome/type filter");
             return;
@@ -196,6 +202,15 @@ final class StormSpawner {
      */
     private static boolean spawnAllowed(ServerLevel level, BlockPos pos, StormProfile profile) {
         return biomeAllows(level, pos, profile) && filterAllows(level, pos, profile);
+    }
+
+    /**
+     * 洞穴风暴的类型约束：会降水、且不会打雷。
+     * 未知类型按「不合格」处理，避免数据包错误时悄悄生成一个永远不落雷的雷暴。
+     */
+    private static boolean isCaveCapable(ServerLevel level, StormProfile profile) {
+        WeatherType type = WeatherTypes.resolve(level, profile.stage(0).type());
+        return type != null && type.hasPrecipitation() && !type.allowsThunder();
     }
 
     /** 档案的 {@code biomes} 列表优先；未写时走默认筛选（会下雨的 SURFACE 风暴只落在会降水的群系）。 */

@@ -87,6 +87,25 @@ public final class StormManager {
         warnedManualCap = false;
     }
 
+    /**
+     * 数据包重载后按新的天气类型定义刷新已有风暴的能力位（同一 ID 修改 JSON 也会生效）。
+     * 返回处理过的风暴数。
+     */
+    public static int refreshCapabilities(ServerLevel level) {
+        int changed = 0;
+        for (StormObject storm : data(level).storms()) {
+            StormProfile profile = storm.resolveProfile(level);
+            if (profile == null) {
+                continue;
+            }
+            ResourceLocation typeId = storm.weatherType(profile);
+            storm.capabilityType = typeId;
+            storm.applyCapabilities(WeatherTypes.resolve(level, typeId));
+            changed++;
+        }
+        return changed;
+    }
+
     /** 数据包重载后清空每片风暴缓存的档案引用，避免继续使用旧注册表对象。 */
     public static void invalidateProfiles() {
         for (StormData data : CACHE.values()) {

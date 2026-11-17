@@ -83,6 +83,8 @@ Whitelist/blacklist only constrain natural cycling; commands can still manually 
 
 ## Weather types and extension API
 
+After `/reload` the mod re-parses weather types and storm profiles, then refreshes the capability bits of existing patch states and storms (type IDs, timers, manual flags and spatial ownership are unchanged). Invalid or deleted types log a single warning instead of being silently turned into clear weather.
+
 Weather types are a **datapack registry** `localizedrain:weather_type`, with built-in `clear` / `rain` / `thunder`
 (`data/localizedrain/localizedrain/weather_type/*.json`). Any datapack can add a type under
 `data/<namespace>/localizedrain/weather_type/<id>.json`:

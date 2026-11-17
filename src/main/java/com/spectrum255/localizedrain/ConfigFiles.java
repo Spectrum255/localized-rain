@@ -1,7 +1,10 @@
 package com.spectrum255.localizedrain;
 
+import com.electronwill.nightconfig.core.CommentedConfig;
+import com.electronwill.nightconfig.toml.TomlParser;
 import com.spectrum255.localizedrain.api.WeatherMode;
 import java.io.IOException;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -10,9 +13,11 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -76,7 +81,7 @@ public final class ConfigFiles {
     private static final List<String> FILTER_KEYS = List.of(
             "weatherBiomeWhitelist", "weatherBiomeBlacklist", "weatherBiomeOverrides");
     private static final List<String> COMMON_KEYS = List.of(
-            "debugLogging", "logWeatherChanges", "logStormSpawns");
+            "debugLogging", "logWeatherChanges", "logStormSpawns", "logStormSpawnsToChat");
 
     private ConfigFiles() {}
 
@@ -285,6 +290,8 @@ public final class ConfigFiles {
 
     /** 每个存档 weather.toml 上一次被读取时的修改时间，用于 weatherMode 热重载检测。 */
     private static final Map<Path, Long> WEATHER_MODE_MTIMES = new HashMap<>();
+    /** 非法 weatherMode 值只警告一次，避免用户编辑期间每次轮询都刷屏。 */
+    private static final Set<String> WARNED_MODES = new HashSet<>();
 
     private static Path worldWeatherFile(ServerLevel level) {
         return level.getServer().getWorldPath(new LevelResource("serverconfig"))
@@ -338,21 +345,34 @@ public final class ConfigFiles {
             if (previous == null || previous == modified) {
                 return null;
             }
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-                String trimmed = line.trim();
-                if (!trimmed.startsWith("weatherMode")) {
-                    continue;
-                }
-                int equals = trimmed.indexOf('=');
-                if (equals < 0) {
-                    continue;
-                }
-                return WeatherMode.parse(trimmed.substring(equals + 1).trim().replace("\"", ""));
+            CommentedConfig parsed;
+            try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+                parsed = new TomlParser().parse(reader);
             }
-        } catch (IOException exception) {
-            // 读取失败忽略，下一轮再试
+            Object value = parsed.get("weatherMode");
+            if (value == null) {
+                return null;
+            }
+            Optional<WeatherMode> mode = WeatherMode.strictParse(String.valueOf(value));
+            if (mode.isEmpty()) {
+                // 非法值不覆盖最后一次有效模式（例如编辑器写到一半或写错枚举名）
+                if (WARNED_MODES.add(String.valueOf(value))) {
+                    Localizedrain.LOGGER.warn(
+                            "[localizedrain] ignoring invalid weatherMode '{}' in {}; keeping the last valid mode",
+                            value, file);
+                }
+                return null;
+            }
+            return mode.get();
+        } catch (IOException | RuntimeException exception) {
+            // 读取/解析失败保留上一次有效模式，下一轮文件变化后再试
+            if (WARNED_MODES.add("parse-failure")) {
+                Localizedrain.LOGGER.warn(
+                        "[localizedrain] could not parse weather mode from {}; keeping the last valid mode",
+                        file, exception);
+            }
+            return null;
         }
-        return null;
     }
 
     /**

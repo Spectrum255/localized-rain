@@ -1,6 +1,7 @@
 package com.spectrum255.localizedrain.weather;
 
 import com.spectrum255.localizedrain.Config;
+import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -15,6 +16,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.saveddata.SavedData;
@@ -27,6 +29,8 @@ import org.slf4j.LoggerFactory;
  */
 public final class WeatherData extends SavedData {
     private static final Logger LOGGER = LoggerFactory.getLogger(WeatherData.class);
+    /** 数据包重载后遇到已删除的类型时只警告一次，避免每 tick 刷日志。 */
+    private static final Set<ResourceLocation> WARNED_UNKNOWN_TYPES = new HashSet<>();
     public static final String FILE_ID = "localizedrain_weather";
     /** 0.4.11 起不再保存退化方格（{@code g:}）父表；旧存档里的该字段会被忽略。 */
     private static final int DATA_VERSION = 12;
@@ -189,6 +193,20 @@ public final class WeatherData extends SavedData {
 
     public Set<String> patches() {
         return this.weatherByPatch.keySet();
+    }
+
+    /**
+     * 数据包重载后按新的天气类型定义刷新已有状态的能力位（precipitating / thunderAllowed）。
+     * 不改变类型 ID、计时器、手动标记或空间归属；返回实际发生变化的状态数。
+     */
+    public int refreshTypeDefinitions(ServerLevel level) {
+        int changed = 0;
+        for (WeatherState state : this.weatherByPatch.values()) {
+            if (state.refreshType(level)) {
+                changed++;
+            }
+        }
+        return changed;
     }
 
     /** 该片（规范 key）是否处于手动覆盖状态；直接按 key 查，不做父链解析。 */
@@ -929,6 +947,26 @@ public final class WeatherData extends SavedData {
         }
 
         /** 当前天气类型（注册表 id）。 */
+        /**
+         * 数据包重载后按新定义重算派生能力位。类型已被删除时保留原 ID 并只警告一次：
+         * 状态仍会按手动/循环计时自然淡出，不会因为一次重载把整片永久锁死。
+         */
+        boolean refreshType(ServerLevel level) {
+            WeatherType type = WeatherTypes.resolve(level, this.type);
+            if (type == null) {
+                if (WARNED_UNKNOWN_TYPES.add(this.type)) {
+                    LOGGER.warn("Stored weather state references unknown type '{}'; keeping it until it changes", this.type);
+                }
+                return false;
+            }
+            boolean precipitating = this.raining && type.hasPrecipitation();
+            boolean thunderAllowed = this.raining && type.allowsThunder();
+            boolean changed = precipitating != this.precipitating || thunderAllowed != this.thunderAllowed;
+            this.precipitating = precipitating;
+            this.thunderAllowed = thunderAllowed;
+            return changed;
+        }
+
         public ResourceLocation typeId() {
             return this.type;
         }

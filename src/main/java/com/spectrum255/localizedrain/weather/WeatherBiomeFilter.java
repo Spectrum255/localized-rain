@@ -194,7 +194,7 @@ public final class WeatherBiomeFilter {
                     LOGGER.warn("Ignoring weather override for biome '{}': weather type '{}' is not registered",
                             biome, forcedId);
                 }
-            } else if (type.isClear()) {
+            } else if (WeatherTypes.CLEAR_ID.equals(forcedId)) {
                 return HARD_LOCKED_CLEAR;
             } else {
                 return new Decision(new Forced(forcedId, type), List.of(), false, false);
@@ -231,7 +231,8 @@ public final class WeatherBiomeFilter {
             if (!explicit && !precipitates && (type.hasPrecipitation() || type.allowsThunder())) {
                 continue;
             }
-            result.add(new Candidate(id, type.hasPrecipitation(), type.allowsThunder(), type.isClear()));
+            result.add(new Candidate(id, type.hasPrecipitation(), type.allowsThunder(),
+                    WeatherTypes.CLEAR_ID.equals(id)));
         }
         return List.copyOf(result);
     }

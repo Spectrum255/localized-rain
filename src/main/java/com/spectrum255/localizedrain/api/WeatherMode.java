@@ -1,6 +1,7 @@
 package com.spectrum255.localizedrain.api;
 
 import com.spectrum255.localizedrain.Config;
+import java.util.Optional;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.StringRepresentable;
 import net.neoforged.neoforge.common.TranslatableEnum;
@@ -32,20 +33,26 @@ public enum WeatherMode implements StringRepresentable, TranslatableEnum {
      * 以及未来从字符串配置迁移时复用。
      */
     public static WeatherMode parse(String input) {
+        return strictParse(input).orElse(PATCHES);
+    }
+
+    /** 与 {@link #parse(String)} 相同，但未知/空值返回 empty，便于调用方报错而不是静默回退。 */
+    public static Optional<WeatherMode> strictParse(String input) {
         if (input == null) {
-            return PATCHES;
+            return Optional.empty();
         }
+        String value = input.trim();
         for (WeatherMode mode : values()) {
-            if (mode.name.equals(input)) {
-                return mode;
+            if (mode.name.equals(value)) {
+                return Optional.of(mode);
             }
         }
         for (WeatherMode mode : values()) {
-            if (mode.name().equalsIgnoreCase(input)) {
-                return mode;
+            if (mode.name().equalsIgnoreCase(value)) {
+                return Optional.of(mode);
             }
         }
-        return PATCHES;
+        return Optional.empty();
     }
 
     /** 配置界面循环按钮显示的文本；没有 {@code TranslatableEnum} 时 NeoForge 会显示枚举常量名。 */

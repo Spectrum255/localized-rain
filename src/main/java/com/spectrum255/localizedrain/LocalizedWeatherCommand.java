@@ -64,6 +64,9 @@ public final class LocalizedWeatherCommand {
             (patches, maximum) -> Component.translatable("commands.localizedrain.weather.area.too_many", patches, maximum));
     private static final DynamicCommandExceptionType AREA_BUDGET = new DynamicCommandExceptionType(
             (limit) -> Component.translatable("commands.localizedrain.weather.area.budget", limit));
+    /** `/weather mode` 的非法参数：必须报错，不能像配置读取那样静默回退 PATCHES。 */
+    private static final DynamicCommandExceptionType INVALID_MODE = new DynamicCommandExceptionType(
+            (name) -> Component.translatable("commands.localizedrain.mode.invalid", name));
 
     private static final SuggestionProvider<CommandSourceStack> TYPE_SUGGESTIONS =
             (context, builder) -> suggestTypes(context, builder);
@@ -105,8 +108,10 @@ public final class LocalizedWeatherCommand {
     }
 
     /** `/weather mode <patches|mobile|vanilla>`：运行期热切换并写回当前存档的 weather.toml。 */
-    private static int setMode(CommandContext<CommandSourceStack> context) {
-        WeatherMode mode = WeatherMode.parse(StringArgumentType.getString(context, "mode"));
+    private static int setMode(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
+        String raw = StringArgumentType.getString(context, "mode");
+        WeatherMode mode = WeatherMode.strictParse(raw)
+                .orElseThrow(() -> INVALID_MODE.create(raw));
         ServerLevel level = context.getSource().getLevel();
         ConfigFiles.writeWeatherMode(level, mode);
         WeatherMode.apply(mode);

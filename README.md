@@ -86,6 +86,8 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 ## 天气类型与扩展 API
 
+`/reload` 后会重新解析天气类型与风暴档案，并按新定义刷新已有片状态与风暴的能力位（类型 ID、计时器、手动标记与空间归属都不变）；非法或已删除的类型会记录一次警告，不会被静默改成晴天。
+
 天气类型是**数据包注册表** `localizedrain:weather_type`，内置 `clear` / `rain` / `thunder` 三个类型
 （`data/localizedrain/localizedrain/weather_type/*.json`）。任何数据包都可以在
 `data/<命名空间>/localizedrain/weather_type/<id>.json` 新增类型：

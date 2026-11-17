@@ -27,6 +27,7 @@ import net.minecraft.network.protocol.game.ClientboundGameEventPacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.ChunkPos;
@@ -517,6 +518,31 @@ public final class WeatherManager {
                 && level.getBiome(pos).value().getPrecipitationAt(pos) == Biome.Precipitation.RAIN
                 && level.canSeeSky(pos)
                 && level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, pos).getY() <= pos.getY();
+    }
+
+    /**
+     * 数据包重载（/reload）后把片模式缓存、已有天气状态与风暴能力位刷新到新的定义。
+     * 不改变任何状态的类型 ID、计时器、手动标记或空间归属。
+     */
+    public static void refreshAfterDatapackReload(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        WeatherBiomeFilter.invalidate();
+        int states = 0;
+        int storms = 0;
+        for (ServerLevel level : server.getAllLevels()) {
+            WeatherData data = data(level);
+            int changedStates = data.refreshTypeDefinitions(level);
+            if (changedStates > 0) {
+                data.setDirty();
+            }
+            states += changedStates;
+            storms += StormManager.refreshCapabilities(level);
+        }
+        Localizedrain.LOGGER.info(
+                "[localizedrain] reloaded datapack weather definitions: {} states and {} storms refreshed",
+                states, storms);
     }
 
     /** 原版 isRainingAt 的完整语义：局部天气 + 头顶无遮挡 + 未被方块挡住 + 该群系确实降的是雨。 */

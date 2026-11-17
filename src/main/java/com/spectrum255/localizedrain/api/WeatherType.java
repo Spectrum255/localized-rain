@@ -66,6 +66,11 @@ public record WeatherType(
     }
 
     /** 没有降水也没有雷暴的类型（晴天）。 */
+    /**
+     * @deprecated 这只是能力位的结论，无法区分「晴天类型」和「无降水但仍有天气的类型」（雾、阴天、沙尘暴）。
+     *             判断天气类型本身是否是晴天请用 {@code WeatherTypes.CLEAR_ID.equals(id)}。
+     */
+    @Deprecated
     public boolean isClear() {
         return !this.hasPrecipitation && !this.allowsThunder;
     }
