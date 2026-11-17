@@ -70,7 +70,7 @@ public final class ConfigFiles {
             "minThunderDelayTicks", "maxThunderDelayTicks", "minThunderTicks", "maxThunderTicks",
             "weatherSimulationIntervalTicks", "scan3dSubstates", "stateRetentionDays",
             "maxStoredStates", "maxParentEntries", "maxColumnScansPerTick",
-            "weatherMode", "isolatedBiomeWeather", "naturalCaveStorms", "caveStormRadius",
+            "weatherMode", "enableBuiltinPresets", "isolatedBiomeWeather", "naturalCaveStorms", "caveStormRadius",
             "maxStormsPerDimension", "maxStormsPerPlayer", "maxManualStormsPerDimension",
             "spawnIntervalTicks", "spawnMinDistance", "spawnMaxDistance", "naturalStormSpawnChance",
             "stormSpawnPlacement",
@@ -355,18 +355,21 @@ public final class ConfigFiles {
             }
             Optional<WeatherMode> mode = WeatherMode.strictParse(String.valueOf(value));
             if (mode.isEmpty()) {
-                // 非法值不覆盖最后一次有效模式（例如编辑器写到一半或写错枚举名）
-                if (WARNED_MODES.add(String.valueOf(value))) {
+                // 非法值不覆盖最后一次有效模式（例如编辑器写到一半或写错枚举名）；按文件区分，避免多存档互相吞掉提示
+                if (WARNED_MODES.add(file + "|" + value)) {
                     Localizedrain.LOGGER.warn(
                             "[localizedrain] ignoring invalid weatherMode '{}' in {}; keeping the last valid mode",
                             value, file);
                 }
                 return null;
             }
+            // 解析成功后清掉该文件的警告键：同一个存档修正后再写错，会再次提示
+            String prefix = file + "|";
+            WARNED_MODES.removeIf(key -> key.startsWith(prefix));
             return mode.get();
         } catch (IOException | RuntimeException exception) {
             // 读取/解析失败保留上一次有效模式，下一轮文件变化后再试
-            if (WARNED_MODES.add("parse-failure")) {
+            if (WARNED_MODES.add(file + "|parse-failure")) {
                 Localizedrain.LOGGER.warn(
                         "[localizedrain] could not parse weather mode from {}; keeping the last valid mode",
                         file, exception);

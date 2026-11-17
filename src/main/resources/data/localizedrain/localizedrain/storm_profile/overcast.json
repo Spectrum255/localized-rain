@@ -1,0 +1,18 @@
+{
+  "weight": 18,
+  "natural": true,
+  "speed_multiplier": 0.9,
+  "radius": [300, 500],
+  "vertical": "surface",
+  "skylight": "required",
+  "stages": [
+    {
+      "type": "localizedrain:overcast",
+      "min_ticks": 4000,
+      "max_ticks": 10000,
+      "rain": [0.0, 0.0],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [1.0, 1.0]
+    }
+  ]
+}

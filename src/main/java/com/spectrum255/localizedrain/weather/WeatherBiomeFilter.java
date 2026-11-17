@@ -1,6 +1,7 @@
 package com.spectrum255.localizedrain.weather;
 
 import com.mojang.logging.LogUtils;
+import com.spectrum255.localizedrain.Config;
 import com.spectrum255.localizedrain.FilterConfig;
 import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
@@ -196,7 +197,7 @@ public final class WeatherBiomeFilter {
                 }
             } else if (WeatherTypes.CLEAR_ID.equals(forcedId)) {
                 return HARD_LOCKED_CLEAR;
-            } else {
+            } else if (!type.requiresSkylight() || level.dimensionType().hasSkyLight()) {
                 return new Decision(new Forced(forcedId, type), List.of(), false, false);
             }
         }
@@ -230,6 +231,9 @@ public final class WeatherBiomeFilter {
             }
             if (!explicit && !precipitates && (type.hasPrecipitation() || type.allowsThunder())) {
                 continue;
+            }
+            if (type.requiresSkylight() && !level.dimensionType().hasSkyLight()) {
+                continue;                   // 声明了 requires_skylight 的类型不出现在无天光维度
             }
             result.add(new Candidate(id, type.hasPrecipitation(), type.allowsThunder(),
                     WeatherTypes.CLEAR_ID.equals(id)));
@@ -276,6 +280,12 @@ public final class WeatherBiomeFilter {
         if (naturalPool.isEmpty()) {
             LOGGER.warn("Weather type tag '{}' is defined but empty: no biome will cycle weather by default",
                     WeatherTypes.NATURAL.location());
+        }
+        if (!Config.builtinPresetsEnabled()) {
+            // 内置新增预设默认关闭：不进入自然池，避免默认就出现暴风雪/沙尘暴等
+            naturalPool = naturalPool.stream()
+                    .filter(typeId -> !WeatherTypes.isPreset(typeId))
+                    .toList();
         }
         return new Snapshot(overrides, whitelist, blacklist, naturalPool);
     }

@@ -123,6 +123,14 @@ public final class Config {
                             "vanilla = do not take over vanilla weather at all")
                     .defineEnum("weatherMode", WeatherMode.MOBILE);
 
+    public static final ModConfigSpec.BooleanValue ENABLE_BUILTIN_PRESETS =
+            WEATHER_BUILDER.comment("Enable the extra built-in weather presets shipped with the mod",
+                            "(snow, blizzard, sandstorm, fog, overcast, ashstorm, soulmist, voidstorm, voidhaze).",
+                            "When false they never appear in natural weather pools or natural storms;",
+                            "datapack-defined weather types and /weather commands are unaffected.",
+                            "Release default: off.")
+                    .define("enableBuiltinPresets", false);
+
     public static final ModConfigSpec.ConfigValue<String> ISOLATED_BIOME_WEATHER =
             WEATHER_BUILDER.comment("Weather inside biomes tagged #localizedrain:storm_isolated (mobile mode only).",
                             "clear  = always clear",
@@ -237,4 +245,18 @@ public final class Config {
     static final ModConfigSpec WEATHER_SPEC = WEATHER_BUILDER.build();
 
     private Config() {}
+
+    /**
+     * 内置新增天气预设（雪/暴风雪/沙尘暴/雾/阴/灰烬风暴/灵魂薄雾/虚空风暴/虚空霾）是否参与自然生成。
+     *
+     * <p>默认关闭；配置尚未加载或读取失败时按关闭处理，避免加载早期意外启用。
+     * 只影响自然池与自然风暴，{@code /weather type}、{@code /weather storm spawn} 与数据包定义的天气不受影响。</p>
+     */
+    public static boolean builtinPresetsEnabled() {
+        try {
+            return ENABLE_BUILTIN_PRESETS.get();
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
 }

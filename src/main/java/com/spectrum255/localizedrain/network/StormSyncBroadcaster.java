@@ -27,7 +27,8 @@ public final class StormSyncBroadcaster implements StormSyncSink {
 
     @Override
     public void sendHud(ServerPlayer player, StormSyncData.Hud hud) {
-        player.connection.send(new WeatherStatePayload(hud.raining(), hud.thundering(), hud.typeKey()));
+        player.connection.send(new WeatherStatePayload(hud.raining(), hud.thundering(),
+                hud.typeKey(), hud.typeId(), hud.intensity()));
     }
 
     private static StormSyncPayload payload(StormSyncData data) {

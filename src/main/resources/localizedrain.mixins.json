@@ -9,6 +9,9 @@
     "EntitySkyLightMixin",
     "MonsterSpawnMixin"
   ],
+  "client": [
+    "LevelRendererMixin"
+  ],
   "injectors": {
     "defaultRequire": 1
   },

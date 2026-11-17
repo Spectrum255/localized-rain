@@ -41,9 +41,11 @@ final class StormSpawner {
         data.setDirty();
         // 维度守卫放在节流之后：下界/末地每 tick 都会被调用，日志必须随 nextSpawnTick 一起节流，
         // 否则每 tick 一条 [LRDBG]，21 分钟能刷出 4.5 万行。
-        if (!level.dimensionType().hasSkyLight() || level.dimensionType().hasCeiling()) {
-            debugSpawn("dimension has no sky light or has a ceiling");
-            return;                     // 自然风暴只生成在有天光、无天花板的维度（下界/末地不会长风暴）
+        // 无天光/有天花板的维度不生成 SURFACE 风暴，但允许 BAND 风暴（生成在玩家高度附近的带里）。
+        boolean skyLit = level.dimensionType().hasSkyLight() && !level.dimensionType().hasCeiling();
+        boolean noSky = !skyLit;
+        if (noSky) {
+            debugSpawn("dimension has no sky light or has a ceiling; band storms only");
         }
 
         int maxStorms = WindField.intConfig(Config.MAX_STORMS_PER_DIMENSION, 8);
@@ -137,50 +139,71 @@ final class StormSpawner {
             return;
         }
         int surfaceY = level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, probe).getY();
-
-        boolean cave = WindField.boolConfig(Config.NATURAL_CAVE_STORMS, false) && random.nextFloat() < 0.4F;
-        double[] band = cave ? findCaveBand(level, probe.getX(), probe.getZ(), surfaceY) : null;
+        BlockPos surfaceProbe = new BlockPos(probe.getX(), surfaceY, probe.getZ());
+        // 隔离检查先于洞穴列扫描：隔离群系不该为一次注定失败的生成付出扫描成本。
+        // 无天光维度没有真正的地表（高度图落在天花板附近），跳过地表隔离检查。
+        if (!noSky && StormManager.isIsolatedAt(level, surfaceProbe)) {
+            debugSpawn("spawn probe is in an isolated biome");
+            return;
+        }
+        boolean cave = noSky || (WindField.boolConfig(Config.NATURAL_CAVE_STORMS, false) && random.nextFloat() < 0.4F);
+        double[] band = cave
+                ? (noSky ? bandAround(level, players, probe) : findCaveBand(level, probe.getX(), probe.getZ(), surfaceY))
+                : null;
         // 群系/隔离/过滤器必须按最终生成点采样：SURFACE 用地表、BAND 用带中心。
         // anywhere_loaded 选点时用的最低建筑高度探针只负责判断区块是否已加载。
         BlockPos sampleProbe = band != null
                 ? new BlockPos(probe.getX(), (int) Math.round((band[0] + band[1]) * 0.5D), probe.getZ())
-                : new BlockPos(probe.getX(), surfaceY, probe.getZ());
-        if (StormManager.isIsolatedAt(level, sampleProbe)) {
-            debugSpawn("spawn probe is in an isolated biome");
-            return;
+                : surfaceProbe;
+        if (band != null && StormManager.isIsolatedAt(level, sampleProbe)) {
+            // 地表不隔离、带中心隔离：放弃洞穴，回退到地表生成
+            band = null;
+            sampleProbe = surfaceProbe;
         }
-        Holder.Reference<StormProfile> holder;
+        Holder.Reference<StormProfile> holder = null;
         if (band != null) {
             // 洞穴风暴只接受「会降水、且不会打雷」的类型：BAND 落雷要求落点见天，雷暴在洞里永远不落雷
+            BlockPos caveProbe = sampleProbe;
+            // 无天光维度里没有「洞穴/地表」之分，任意档案都允许生成为带风暴；
+            // 有天光维度沿用洞穴约束（会降水、不会打雷）。
             holder = StormProfiles.randomNatural(level, random,
-                    profile -> isCaveCapable(level, profile)
-                            && spawnAllowed(level, sampleProbe, profile)).orElse(null);
+                    profile -> (noSky || isCaveCapable(level, profile))
+                            && spawnAllowed(level, caveProbe, profile, noSky)).orElse(null);
             if (holder == null) {
-                debugSpawn("no cave-capable profile passes biome/type filter");
+                debugSpawn("no cave-capable profile passes biome/type filter; falling back to surface");
+                band = null;
+                sampleProbe = surfaceProbe;
+            }
+        }
+        if (band == null) {
+            if (noSky) {
+                debugSpawn("no band-capable profile in a no-skylight dimension");
                 return;
             }
-            int radius = WindField.intConfig(Config.CAVE_STORM_RADIUS, 64);
+            BlockPos surfaceQuery = sampleProbe;
+            holder = StormProfiles.randomNatural(level, random,
+                    profile -> spawnAllowed(level, surfaceQuery, profile)).orElse(null);
+            if (holder == null) {
+                debugSpawn("no natural profile passes biome/type filter");
+                return;
+            }
             if (StormManager.spawn(level, StormSpawnSpec
                     .builder(holder.key().location(), new Vec3(x, surfaceY, z))
-                    .radius(radius)
-                    .verticalBand(band[0], band[1])
                     .manual(false)
                     .build()) == null) {
-                debugSpawn("StormManager rejected the cave storm");
+                debugSpawn("StormManager rejected the natural storm");
             }
             return;
         }
-        holder = StormProfiles.randomNatural(level, random,
-                profile -> spawnAllowed(level, sampleProbe, profile)).orElse(null);
-        if (holder == null) {
-            debugSpawn("no natural profile passes biome/type filter");
-            return;
-        }
+        int radius = WindField.intConfig(Config.CAVE_STORM_RADIUS, 64);
+        double anchorY = noSky ? (band[0] + band[1]) * 0.5D : surfaceY;
         if (StormManager.spawn(level, StormSpawnSpec
-                .builder(holder.key().location(), new Vec3(x, surfaceY, z))
+                .builder(holder.key().location(), new Vec3(x, anchorY, z))
+                .radius(radius)
+                .verticalBand(band[0], band[1])
                 .manual(false)
                 .build()) == null) {
-            debugSpawn("StormManager rejected the natural storm");
+            debugSpawn("StormManager rejected the cave storm");
         }
     }
 
@@ -201,7 +224,48 @@ final class StormSpawner {
      * <p>把过滤放进加权抽取的候选集合里，避免先抽到一个注定被拒绝的档案再浪费这次尝试。</p>
      */
     private static boolean spawnAllowed(ServerLevel level, BlockPos pos, StormProfile profile) {
-        return biomeAllows(level, pos, profile) && filterAllows(level, pos, profile);
+        return spawnAllowed(level, pos, profile, false);
+    }
+
+    /**
+     * 与 {@link #spawnAllowed(ServerLevel, BlockPos, StormProfile)} 相同，但可以跳过默认的「降水群系」规则。
+     * 无天光维度（下界/自定义洞穴维度）的群系通常不降水，默认规则会把所有风暴都拒掉。
+     */
+    private static boolean spawnAllowed(ServerLevel level, BlockPos pos, StormProfile profile,
+                                        boolean ignoreDefaultBiomeRule) {
+        return profile.allowsDimension(level)
+                && profile.allowsSkylight(level)
+                && typesAllowSkylight(level, profile)
+                && biomeAllows(level, pos, profile, ignoreDefaultBiomeRule)
+                && filterAllows(level, pos, profile);
+    }
+
+    /** 无天光维度里跳过任一阶段声明了 {@code requires_skylight} 的档案。 */
+    private static boolean typesAllowSkylight(ServerLevel level, StormProfile profile) {
+        if (level.dimensionType().hasSkyLight()) {
+            return true;
+        }
+        for (StormProfile.Stage stage : profile.stages()) {
+            WeatherType type = WeatherTypes.resolve(level, stage.type());
+            if (type != null && type.requiresSkylight()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 无天光/有天花板维度没有「地表」：在玩家高度附近取一条竖直带（向上多留空隙）。 */
+    private static double[] bandAround(ServerLevel level, List<ServerPlayer> players, BlockPos probe) {
+        int refY = players.isEmpty() ? probe.getY() : (int) Math.round(players.get(0).getY());
+        int min = level.getMinBuildHeight() + 1;
+        int max = level.getMaxBuildHeight() - 2;
+        int low = Math.max(min, refY - 24);
+        int high = Math.min(max, refY + 40);
+        if (high - low < 8) {
+            low = min;
+            high = max;
+        }
+        return new double[]{low, high};
     }
 
     /**
@@ -210,13 +274,15 @@ final class StormSpawner {
      */
     private static boolean isCaveCapable(ServerLevel level, StormProfile profile) {
         WeatherType type = WeatherTypes.resolve(level, profile.stage(0).type());
-        return type != null && type.hasPrecipitation() && !type.allowsThunder();
+        return type != null && type.hasPrecipitation() && !type.allowsThunder() && !type.requiresSkylight();
     }
 
     /** 档案的 {@code biomes} 列表优先；未写时走默认筛选（会下雨的 SURFACE 风暴只落在会降水的群系）。 */
-    private static boolean biomeAllows(ServerLevel level, BlockPos pos, StormProfile profile) {
+    private static boolean biomeAllows(ServerLevel level, BlockPos pos, StormProfile profile,
+                                       boolean ignoreDefaultBiomeRule) {
         Holder<Biome> biome = level.getBiome(pos);
-        return profile.restrictsBiomes() ? profile.allowsBiome(biome) : profile.defaultBiomeAllowed(level, biome);
+        return profile.restrictsBiomes() ? profile.allowsBiome(biome)
+                : ignoreDefaultBiomeRule || profile.defaultBiomeAllowed(level, biome);
     }
 
     /** 生成点过滤器：只约束生成中心，不拦截后续移动（设计 §7.2）。
@@ -264,7 +330,9 @@ final class StormSpawner {
         return StormManager.all(level).stream()
                 .filter(storm -> !storm.manual())
                 .filter(storm -> {
-                    double range = WindField.intConfig(Config.STORM_SPAWN_MAX_DISTANCE, 700) * 1.5D;
+                    double range = Math.min(
+                            WindField.intConfig(Config.STORM_SPAWN_MAX_DISTANCE, 700) * 1.5D,
+                            level.getServer().getPlayerList().getSimulationDistance() * 16.0D);
                     double dx = storm.x() - player.getX();
                     double dz = storm.z() - player.getZ();
                     return dx * dx + dz * dz <= range * range;

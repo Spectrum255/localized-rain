@@ -1,5 +1,6 @@
 package com.spectrum255.localizedrain.api;
 
+import com.spectrum255.localizedrain.Config;
 import com.spectrum255.localizedrain.Localizedrain;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,7 +28,22 @@ public final class StormProfiles {
     public static final TagKey<StormProfile> NATURAL_TAG =
             TagKey.create(REGISTRY_KEY, ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "natural"));
 
+    /** 1.7.0 起随模组附带的风暴档案；默认不参与自然生成。 */
+    private static final java.util.Set<ResourceLocation> PRESET_IDS = java.util.Set.of(
+            presetId("snow"), presetId("blizzard"), presetId("sandstorm"), presetId("fog"),
+            presetId("overcast"), presetId("ashstorm"), presetId("soulmist"),
+            presetId("voidstorm"), presetId("voidhaze"));
+
+    private static ResourceLocation presetId(String path) {
+        return ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, path);
+    }
+
     private StormProfiles() {}
+
+    /** 是否为内置新增风暴预设（默认关闭，由 {@code enableBuiltinPresets} 控制是否进入自然池）。 */
+    public static boolean isPreset(ResourceLocation profileId) {
+        return PRESET_IDS.contains(profileId);
+    }
 
     public static Optional<Holder.Reference<StormProfile>> byId(Level level, ResourceLocation id) {
         Registry<StormProfile> registry = level.registryAccess().registry(REGISTRY_KEY).orElse(null);
@@ -43,7 +59,14 @@ public final class StormProfiles {
         boolean tagged = registry.getTag(NATURAL_TAG).map(set -> set.size() > 0).orElse(false);
         List<Holder.Reference<StormProfile>> pool = new ArrayList<>();
         for (Holder.Reference<StormProfile> holder : registry.holders().toList()) {
-            if (tagged ? holder.is(NATURAL_TAG) : holder.value().natural()) {
+            StormProfile profile = holder.value();
+            // 内置新增预设默认关闭，但它们若只在无天光维度生成（skylight=forbidden），
+            // 关掉会让下界自然风暴池变空；这类档案保留，主世界本来也看不到它们。
+            if (!Config.builtinPresetsEnabled() && isPreset(holder.key().location())
+                    && profile.skylight() != StormProfile.SkylightMode.FORBIDDEN) {
+                continue;
+            }
+            if (tagged ? holder.is(NATURAL_TAG) : profile.natural()) {
                 pool.add(holder);
             }
         }

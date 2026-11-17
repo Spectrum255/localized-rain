@@ -1,0 +1,19 @@
+{
+  "weight": 14,
+  "natural": true,
+  "speed_multiplier": 1.2,
+  "radius": [150, 260],
+  "vertical": "surface",
+  "skylight": "required",
+  "stages": [
+    {
+      "type": "localizedrain:snow",
+      "min_ticks": 2400,
+      "max_ticks": 6000,
+      "rain": [0.3, 0.6],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [0.9, 1.0]
+    }
+  ],
+  "environment": { "stage_speed_from_moisture": true, "moisture_gain": 0.001, "moisture_decay": 0.002 }
+}

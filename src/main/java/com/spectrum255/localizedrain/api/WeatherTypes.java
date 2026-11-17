@@ -3,9 +3,11 @@ package com.spectrum255.localizedrain.api;
 import com.spectrum255.localizedrain.Localizedrain;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderSet;
 import net.minecraft.core.Registry;
@@ -53,6 +55,12 @@ public final class WeatherTypes {
     /** 按 id 缓存解析结果；注册表随数据包重载变化，配置重载/服务器启动时清空。 */
     private static final Map<ResourceLocation, WeatherType> CACHE = new HashMap<>();
 
+    /** 内置晴天被数据包改写时只提示一次（每次 {@link #invalidate()} 后重新提示）。 */
+    private static final Set<ResourceLocation> WARNED_BUILTIN = new HashSet<>();
+
+    /** 天气类型自相矛盾（写了 precipitation 但 has_precipitation=false）每次重载只提示一次。 */
+    private static final Set<ResourceLocation> WARNED_INCONSISTENT = new HashSet<>();
+
     private WeatherTypes() {}
 
     private static ResourceLocation id(String path) {
@@ -84,9 +92,38 @@ public final class WeatherTypes {
         WeatherType resolved = registry == null ? null : registry.get(typeId);
         if (resolved != null) {
             resolved = resolved.withDerivedDisplayKey(typeId);
+            resolved = normalizeBuiltin(typeId, resolved);
             CACHE.put(typeId, resolved);
         }
         return resolved;
+    }
+
+    /**
+     * 规范化内置类型：{@code clear} 的定义不允许被数据包改成会降水/雷暴。
+     *
+     * <p>晴天判定完全依赖 {@code CLEAR_ID} 的 id 相等（过滤器、HUD、自然池），如果 clear 同时
+     * 具备降水/雷暴能力，会出现「过滤器认为晴天、状态却在降水」的互斥状态。数据包改写时这里
+     * 强制压回晴天能力位，只保留显示名与渲染提示，并提示一次。</p>
+     */
+    private static WeatherType normalizeBuiltin(ResourceLocation typeId, WeatherType type) {
+        if (type.precipitation() != Biome.Precipitation.NONE && !type.hasPrecipitation()
+                && WARNED_INCONSISTENT.add(typeId)) {
+            Localizedrain.LOGGER.warn(
+                    "Weather type '{}' sets precipitation={} but has_precipitation=false; the capability flag wins",
+                    typeId, type.precipitation());
+        }
+        if (CLEAR_ID.equals(typeId) && (type.hasPrecipitation() || type.allowsThunder())) {
+            if (WARNED_BUILTIN.add(typeId)) {
+                Localizedrain.LOGGER.warn(
+                        "Built-in weather type '{}' was overridden with precipitation/thunder; forcing it back to clear",
+                        typeId);
+            }
+            return new WeatherType(type.displayKey(), type.display(),
+                    false, Biome.Precipitation.NONE, false,
+                    type.particle(), type.sound(), type.particleCount(), type.soundIntervalTicks(),
+                    type.visuals(), type.effects(), type.extra(), type.requiresSkylight());
+        }
+        return type;
     }
 
     /** 注册表里的全部天气类型 id，按注册顺序（数据包合并后）。 */
@@ -98,6 +135,16 @@ public final class WeatherTypes {
     /** 是否为内置的三个类型（内置类型走原版雨/雷通道，HUD 用原版天气行）。 */
     public static boolean isBuiltin(ResourceLocation typeId) {
         return CLEAR_ID.equals(typeId) || RAIN_ID.equals(typeId) || THUNDER_ID.equals(typeId);
+    }
+
+    /** 1.7.0 起随模组附带、默认不参与自然生成的新增预设类型。 */
+    private static final Set<ResourceLocation> PRESET_IDS = Set.of(
+            id("snow"), id("blizzard"), id("sandstorm"), id("fog"), id("overcast"),
+            id("ashstorm"), id("soulmist"), id("voidstorm"), id("voidhaze"));
+
+    /** 是否为内置新增天气预设（默认关闭，由 {@code enableBuiltinPresets} 控制是否进入自然池）。 */
+    public static boolean isPreset(ResourceLocation typeId) {
+        return PRESET_IDS.contains(typeId);
     }
 
     /**
@@ -128,6 +175,8 @@ public final class WeatherTypes {
     /** 清空解析缓存（服务器启动、配置重载、数据包重载时调用）。 */
     public static void invalidate() {
         CACHE.clear();
+        WARNED_BUILTIN.clear();
+        WARNED_INCONSISTENT.clear();
     }
 
     private static Registry<WeatherType> registry(Level level) {

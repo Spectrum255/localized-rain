@@ -4,6 +4,7 @@
   "speed_multiplier": 2.2,
   "radius": [90, 150],
   "vertical": "surface",
+  "skylight": "required",
   "stages": [
     {
       "type": "localizedrain:thunder",

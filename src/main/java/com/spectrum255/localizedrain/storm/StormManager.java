@@ -16,6 +16,7 @@ import com.spectrum255.localizedrain.api.event.StormSpawnEvent;
 import com.spectrum255.localizedrain.api.event.StormStageChangeEvent;
 import com.spectrum255.localizedrain.weather.WeatherLightning;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
+import com.spectrum255.localizedrain.weather.WeatherEffects;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -142,9 +143,10 @@ public final class StormManager {
         }
     }
 
-    /** 玩家退出时清掉 HUD 缓存，重连后能重新收到完整状态。 */
+    /** 玩家退出时清掉 HUD 缓存与效果记录，重连后能重新收到完整状态。 */
     public static void forget(UUID playerId) {
         LAST_HUD.remove(playerId);
+        WeatherEffects.forget(playerId);
     }
 
     /** 领域对象的只读投影；由安装的 {@link StormSyncSink} 编码并发送。 */
@@ -286,6 +288,10 @@ public final class StormManager {
         // 这里提前返回，避免 StormSpawner 之外的其他入口在本模式下产生自然风暴。
         // 已有风暴留在 StormData 中，切回 MOBILE 后会继续推进。
         if (WeatherMode.current() != WeatherMode.MOBILE) {
+            // 切回片模式/原版后风暴不再推进：把移动模式留下的移速/伤害效果收掉
+            for (ServerPlayer player : level.players()) {
+                WeatherEffects.clear(player);
+            }
             return;
         }
         StormData data = data(level);
@@ -363,8 +369,36 @@ public final class StormManager {
         // 客户端风暴渲染由 StormSyncPayload + ClientStormWeather 负责；第三方应改用 WeatherApi。
         spawnLightning(level);
         sendHud(level);
+        applyPlayerEffects(level);
         StormSpawner.tick(level);
         data.setDirty();
+    }
+
+    /**
+     * 移动模式：把玩家所在「主导风暴」的类型 {@code effects} 应用到玩家，
+     * 与片模式共用 {@link WeatherEffects}，离开风暴后恢复移速并清空伤害计时。
+     */
+    private static void applyPlayerEffects(ServerLevel level) {
+        for (ServerPlayer player : level.players()) {
+            StormObject storm = dominantAt(level, player.blockPosition());
+            if (storm == null) {
+                WeatherEffects.clear(player);
+                continue;
+            }
+            StormProfile profile = storm.resolveProfile(level);
+            WeatherType type = profile == null ? null
+                    : WeatherTypes.byId(level, storm.weatherType(profile));
+            if (type == null) {
+                WeatherEffects.clear(player);
+                continue;
+            }
+            // 无降水类型（雾/沙尘暴）没有雨量可读，风暴存在即视为生效；有降水类型按强度判定
+            boolean active = !storm.dying()
+                    && (type.hasPrecipitation()
+                        ? storm.effectiveRain() > 0.05F || storm.effectiveThunder() > 0.05F
+                        : true);
+            WeatherEffects.apply(player, level, type, active);
+        }
     }
 
     /** 风暴中心到最近玩家的水平距离；维度内没有玩家时返回最大值。 */
@@ -382,15 +416,20 @@ public final class StormManager {
             StormObject storm = dominantAt(level, player.blockPosition());
             StormSyncData.Hud hud;
             if (storm == null) {
-                hud = new StormSyncData.Hud(false, false, WeatherTypes.byId(level, WeatherTypes.CLEAR_ID).displayKey());
+                hud = new StormSyncData.Hud(false, false, "", "", 0.0F);
             } else {
                 StormProfile profile = storm.resolveProfile(level);
                 WeatherType type = profile == null ? WeatherTypes.byId(level, WeatherTypes.CLEAR_ID)
                         : WeatherTypes.byId(level, storm.weatherType(profile));
+                boolean builtin = profile == null || WeatherTypes.isBuiltin(storm.weatherType(profile));
+                // 有降水类型跟随雨量；无降水类型（雾/沙尘暴）在风暴存在期间恒为 1，客户端据此决定粒子数量
+                float intensity = type.hasPrecipitation() ? storm.effectiveRain() : 1.0F;
                 hud = new StormSyncData.Hud(
                         type.hasPrecipitation() && storm.effectiveRain() > 0.2F,
                         type.allowsThunder() && storm.effectiveThunder() > 0.9F,
-                        type.displayKey());
+                        builtin ? "" : type.displayKey(),
+                        builtin ? "" : storm.weatherType(profile).toString(),
+                        intensity);
             }
             if (!hud.equals(LAST_HUD.get(player.getUUID()))) {
                 LAST_HUD.put(player.getUUID(), hud);
@@ -455,11 +494,6 @@ public final class StormManager {
         int stageIndex = Math.min(spec.stage(), profile.stages().size() - 1);
         StormProfile.Stage stage = profile.stage(stageIndex);
         ResourceLocation effectiveType = spec.typeOverride().orElse(stage.type());
-        if (!allowsManualStorms(level) && vertical != StormProfile.VerticalMode.SURFACE
-                && (WeatherTypes.byId(level, effectiveType).allowsThunder() || profile.hasThunderStage(level))) {
-            // 无天光 / 有天花板的维度里洞穴风暴永不落雷：直接拒绝雷暴类型（命令与 API 一致）
-            return null;
-        }
         StormObject storm = StormObject.create(UUID.randomUUID(), spec.profileId(),
                 spec.center().x, spec.center().z, radius, minY, maxY, vertical,
                 spec.manual(), random.nextLong(), level.getGameTime());
@@ -471,6 +505,8 @@ public final class StormManager {
         storm.lifeTicksLeft = spec.lifetimeTicks();
         WeatherType resolvedType = WeatherTypes.resolve(level, effectiveType);
         // 立刻用阶段强度初始化，否则生成后第一次 broadcast 的强度仍是 0
+        // 初始强度取阶段区间下限：新风暴从「平静」开始，再由湿度演化逐渐增强/减弱。
+        // 这里有意用 lerp(0.0F)（而不是随机起始值），避免风暴生成瞬间就满强度。
         storm.rainIntensity = spec.rainIntensity().orElse(stage.rain().lerp(0.0F));
         storm.thunderIntensity = spec.thunderIntensity().orElse(stage.thunder().lerp(0.0F));
         // typeOverride 只改类型：能力位存进风暴，阶段推进与强度覆盖时都会再次钳制
@@ -873,13 +909,19 @@ public final class StormManager {
         double py = pos.getY() + 0.5D;
         double pz = pos.getZ() + 0.5D;
         int replaced = removeWhere(level, snapshot -> snapshot.manual()
-                && snapshot.weatherType().equals(typeId)
+                && matchesRequested(level, snapshot.weatherType(), typeId)
                 && snapshot.covers(px, py, pz), StormRemoveEvent.Reason.MANUAL, false);
         StormSpawnSpec.Builder builder = StormSpawnSpec.builder(match.id(), Vec3.atCenterOf(pos))
                 .stage(match.stageIndex())
-                .typeOverride(typeId)
+                // 精确匹配才覆盖类型；能力位匹配（下界 /weather thunder → voidstorm）保留档案自己的类型外观
+                .typeOverride(match.direct() ? typeId : null)
                 .velocity(0.0D, 0.0D)       // 指令/API 定位的风暴默认固定，不被风场吹走
                 .manual(true);
+        if (!allowsManualStorms(level)) {
+            // 无天光/有天花板维度：SURFACE 档案降级为以玩家为中心的 BAND，否则风暴会卡在维度顶部
+            double[] band = manualBand(level, pos);
+            builder.verticalBand(band[0], band[1]);
+        }
         if (radius > 0) {
             builder.radius(radius);         // 0 = 沿用档案的 radius 区间
         }
@@ -893,8 +935,42 @@ public final class StormManager {
         return snapshot;
     }
 
+    /** 无天光维度里手动风暴的默认带：以玩家位置为中心，太窄时退化为整列。 */
+    private static double[] manualBand(ServerLevel level, BlockPos pos) {
+        double min = Math.max(level.getMinBuildHeight(), pos.getY() - 24.0D);
+        double max = Math.min(level.getMaxBuildHeight(), pos.getY() + 40.0D);
+        if (max - min < 32.0D) {
+            return new double[] {level.getMinBuildHeight(), level.getMaxBuildHeight()};
+        }
+        return new double[] {min, max};
+    }
+
     /** 档案 + 匹配的起始阶段（例如 thunderstorm 的 thunder 在 stage 1）。 */
-    private record ProfileMatch(ResourceLocation id, int stageIndex, int weight) {
+    private record ProfileMatch(ResourceLocation id, int stageIndex, int weight, boolean direct) {
+    }
+
+    /**
+     * 命令里的内置天气 id 与自定义类型的能力位匹配：
+     * {@code /weather thunder} 也接受「自身不是 thunder、但 allows_thunder=true」的阶段
+     * （例如下界的 voidstorm）；{@code /weather rain} 同理接受降水类型为雨的阶段。
+     * 这种匹配不覆盖阶段自己的类型，风暴仍显示 voidstorm/blizzard 的外观。
+     */
+    private static boolean matchesCapability(ServerLevel level, ResourceLocation stageType, ResourceLocation requested) {
+        WeatherType type = WeatherTypes.resolve(level, stageType);
+        if (type == null) {
+            return false;
+        }
+        if (requested.equals(WeatherTypes.THUNDER_ID)) {
+            return type.allowsThunder();
+        }
+        if (requested.equals(WeatherTypes.RAIN_ID)) {
+            return type.hasPrecipitation() && type.precipitation() == Biome.Precipitation.RAIN;
+        }
+        return false;
+    }
+
+    private static boolean matchesRequested(ServerLevel level, ResourceLocation actual, ResourceLocation requested) {
+        return actual.equals(requested) || matchesCapability(level, actual, requested);
     }
 
     /**
@@ -902,8 +978,9 @@ public final class StormManager {
      * <ul>
      *   <li>有天空的维度：优先 {@code natural = true} 且 SURFACE 的档案；没有自然档案时回退到
      *       非自然 SURFACE，避免数据包把所有档案设为 natural=false 后 /weather rain 静默失效；</li>
-     *   <li>无天光 / 有天花板的维度：只接受 BAND/COLUMN 档案（不受 natural 限制，
-     *       cave_rain 本身就是 natural=false 的手动档案）；</li>
+     *   <li>无天光 / 有天花板的维度：接受所有通过 {@link StormProfile#allowsSkylight} 的档案
+     *       （BAND/COLUMN 直接使用；SURFACE 由 spawn 用 verticalBand 覆盖成本地 BAND），
+     *       不区分 natural 标志，避免 cave_rain 与 voidstorm 被分流；</li>
      *   <li>候选按 id 排序后按 weight 加权随机：手动指令也会出现不同强度的天气，而不是恒取最重档案。</li>
      * </ul>
      */
@@ -917,21 +994,35 @@ public final class StormManager {
             if (profile == null) {
                 continue;
             }
+            // 档案层的天光要求：REQUIRED 只允许有天光维度，FORBIDDEN 只允许无天光维度。
+            // 之前漏掉这个检查，导致 FORBIDDEN 档案能被 /weather 生成到主世界。
+            if (!profile.allowsSkylight(level)) {
+                continue;
+            }
+            // 档案层的维度白名单：手动生成也必须遵守，否则「下界专属 / 末地专属」只对自然生成生效。
+            if (!profile.allowsDimension(level)) {
+                continue;
+            }
             int stageIndex = -1;
+            boolean direct = false;
             for (int index = 0; index < profile.stages().size(); index++) {
-                if (profile.stage(index).type().equals(typeId)) {
+                ResourceLocation stageType = profile.stage(index).type();
+                if (stageType.equals(typeId)) {
                     stageIndex = index;
+                    direct = true;
                     break;
+                }
+                if (stageIndex < 0 && matchesCapability(level, stageType, typeId)) {
+                    stageIndex = index;      // 精确匹配优先，没找到才用能力位匹配
                 }
             }
             if (stageIndex < 0) {
                 continue;
             }
-            ProfileMatch match = new ProfileMatch(id, stageIndex, Math.max(1, profile.weight()));
+            ProfileMatch match = new ProfileMatch(id, stageIndex, Math.max(1, profile.weight()), direct);
             if (nonSurface) {
-                if (profile.vertical() != StormProfile.VerticalMode.SURFACE) {
-                    natural.add(match);
-                }
+                // 无天光/有天花板维度：skylight 允许的档案都可用；SURFACE 档案由 spawn 用 verticalBand 覆盖成 BAND
+                natural.add(match);
             } else if (profile.vertical() == StormProfile.VerticalMode.SURFACE) {
                 if (profile.natural()) {
                     natural.add(match);
@@ -1030,6 +1121,7 @@ public final class StormManager {
             return null;
         }
         double strikeRange = Math.min(storm.radiusAt(), 128.0D);
+        boolean skylit = level.dimensionType().hasSkyLight();
         for (int attempt = 0; attempt < 4; attempt++) {
             double angle = random.nextDouble() * Math.PI * 2.0;
             double distance = Math.sqrt(random.nextDouble()) * strikeRange;
@@ -1051,7 +1143,7 @@ public final class StormManager {
                     candidate = candidate.above();
                 }
                 if (level.getBlockState(candidate).isAir()
-                        && level.canSeeSky(candidate)   // 只落在正上方有开口的点，封闭洞穴不落雷
+                        && (!skylit || level.canSeeSky(candidate))   // 有天光的维度只落在开口下方；无天光维度没有天空概念
                         && storm.covers(candidate.getX() + 0.5D, candidate.getY() + 0.5D, candidate.getZ() + 0.5D)
                         && isThunderingAt(level, candidate)) {
                     return candidate;

@@ -10,14 +10,20 @@ public final class LocalizedrainNetwork {
         // 版本号随 payload 结构变化（"2" 起增加 typeKey 第三字段，"3" 起增加风暴快照包，
         // "4" 起风暴快照带消亡剩余 tick 以平滑淡出，"5" 起快照尾部带服务端的隔离群系/衰减配置，
         // "6" 起风暴条目带类型能力位 hasPrecipitation/allowsThunder，
-        // "7" 起快照带 active 标志：服务端切回 patches/vanilla 时客户端停止用风暴缓存接管雨量）
-        event.registrar("7")
+        // "7" 起快照带 active 标志：服务端切回 patches/vanilla 时客户端停止用风暴缓存接管雨量，
+        // "8" 起天气包带 typeId/intensity：客户端据类型定义渲染自定义粒子与音效）
+        event.registrar("8")
                 .optional()
                 .playToClient(
                         WeatherStatePayload.TYPE,
                         WeatherStatePayload.STREAM_CODEC,
-                        (payload, context) -> context.enqueueWork(
-                                () -> ClientWeatherTargets.set(payload.raining(), payload.thundering(), payload.typeKey())))
+                        (payload, context) -> context.enqueueWork(() -> {
+                            ClientWeatherTargets.set(payload.raining(), payload.thundering(),
+                                    payload.typeKey(), payload.typeId(), payload.intensity());
+                            // 立即刷新，避免本帧渲染仍用旧类型（切到自定义天气后第一帧还下原版雨）
+                            com.spectrum255.localizedrain.client.ClientWeatherVisuals
+                                    .refresh(net.minecraft.client.Minecraft.getInstance());
+                        }))
                 .playToClient(
                         StormSyncPayload.TYPE,
                         StormSyncPayload.STREAM_CODEC,

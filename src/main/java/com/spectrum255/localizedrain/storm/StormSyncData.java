@@ -18,6 +18,6 @@ public record StormSyncData(List<Entry> storms, String isolatedMode, double fall
                         float rain, float thunder,
                         boolean manual, boolean dying, int dyingTicksLeft) {}
 
-    /** HUD 目标值：只在变化时发送。 */
-    public record Hud(boolean raining, boolean thundering, String typeKey) {}
+    /** HUD/视觉目标值：只在变化时发送。typeId/intensity 供客户端解析自定义天气的粒子与音效。 */
+    public record Hud(boolean raining, boolean thundering, String typeKey, String typeId, float intensity) {}
 }

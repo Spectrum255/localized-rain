@@ -63,8 +63,8 @@ public final class Localizedrain {
                 "localizedrain/global-filters.toml");
         modContainer.registerConfig(ModConfig.Type.SERVER, Config.WEATHER_SPEC, "localizedrain/weather.toml");
         modContainer.registerConfig(ModConfig.Type.SERVER, FilterConfig.FILTERS_SPEC, "localizedrain/filters.toml");
-        // 数据包总开关：config/localizedrain/datapacks.toml
-        modContainer.registerConfig(ModConfig.Type.COMMON, DatapackConfig.SPEC, "localizedrain/datapacks.toml");
+        // 配置目录数据包开关：config/localizedrain/datapacks.toml（由 DatapackConfig 自己读写，支持逐包开关）
+        DatapackConfig.load();
         // 配置目录里的数据包：config/localizedrain/datapacks/<name>/data/...
         try {
             Files.createDirectories(ConfigDatapacks.root());

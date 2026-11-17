@@ -1,0 +1,27 @@
+{
+  "weight": 4,
+  "natural": true,
+  "speed_multiplier": 1.2,
+  "radius": [150, 260],
+  "vertical": "surface",
+  "skylight": "forbidden",
+  "dimensions": ["minecraft:the_end"],
+  "stages": [
+    {
+      "type": "localizedrain:voidstorm",
+      "min_ticks": 2000,
+      "max_ticks": 4800,
+      "rain": [0.0, 0.0],
+      "thunder": [0.4, 0.8],
+      "radius_scale": [0.9, 1.0]
+    },
+    {
+      "type": "localizedrain:voidstorm",
+      "min_ticks": 1200,
+      "max_ticks": 3000,
+      "rain": [0.0, 0.0],
+      "thunder": [0.2, 0.6],
+      "radius_scale": [1.1, 0.9]
+    }
+  ]
+}

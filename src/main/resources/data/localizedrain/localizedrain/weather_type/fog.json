@@ -1,0 +1,10 @@
+{
+  "display_key": "weather.localizedrain.fog",
+  "has_precipitation": false,
+  "precipitation": "none",
+  "allows_thunder": false,
+  "particle": "minecraft:cloud",
+  "particle_count": 30,
+  "sound_interval_ticks": 0,
+  "visuals": { "fog_color": "#b0b4b8", "fog_near": 4, "fog_far": 40 }
+}

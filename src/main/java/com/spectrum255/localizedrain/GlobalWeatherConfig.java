@@ -42,6 +42,7 @@ public final class GlobalWeatherConfig {
 
         // 模式与过滤器相关
         BUILDER.defineEnum("weatherMode", WeatherMode.MOBILE);
+        BUILDER.define("enableBuiltinPresets", false);
         BUILDER.define("isolatedBiomeWeather", "clear",
                 value -> value instanceof String mode && ISOLATED_WEATHER_MODES.contains(mode));
 

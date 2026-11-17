@@ -1,0 +1,12 @@
+{
+  "display_key": "weather.localizedrain.soulmist",
+  "has_precipitation": false,
+  "precipitation": "none",
+  "allows_thunder": false,
+  "particle": "minecraft:soul",
+  "sound": "minecraft:block.soul_sand.step",
+  "particle_count": 70,
+  "sound_interval_ticks": 80,
+  "visuals": { "fog_color": "#2f6f6a", "fog_near": 5, "fog_far": 40 },
+  "effects": { "movement_speed": 0.95 }
+}

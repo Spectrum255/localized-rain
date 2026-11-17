@@ -16,10 +16,12 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.core.QuartPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.Registries;
@@ -30,6 +32,11 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.damagesource.DamageType;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.biome.Biome;
@@ -107,7 +114,10 @@ public final class WeatherManager {
             case PATCHES -> tickPatches(level);
             case MOBILE -> tickMobile(level);
             case VANILLA -> {
-                // Mixin 已在 VANILLA 下直通，不会走到这里；保留分支便于直接调用时安全
+                // 原版模式不接管天气：清掉片模式/移动模式可能残留的移速与伤害效果
+                for (ServerPlayer player : level.players()) {
+                    WeatherEffects.clear(player);
+                }
             }
         }
     }
@@ -385,14 +395,14 @@ public final class WeatherManager {
         held.addAll(forcedByPatch.keySet());
 
         if (!cycling.isEmpty()) {
-            data.tick(random, cycleWeather, cycling, gameTime, candidateByPatch, ticks);
+            data.tick(level, random, cycleWeather, cycling, gameTime, candidateByPatch, ticks);
         }
         if (!held.isEmpty()) {
-            data.tick(random, false, held, gameTime, Map.of(), ticks);
+            data.tick(level, random, false, held, gameTime, Map.of(), ticks);
         }
         if (!manual.isEmpty()) {
             // 手动覆盖单独计时：不参与自然循环，到期后回到晴天再由名单重新接管
-            data.tickManual(random, manual, gameTime, ticks, cycleWeather);
+            data.tickManual(level, random, manual, gameTime, ticks, cycleWeather);
         }
 
         if (logWeatherChanges()) {
@@ -524,11 +534,16 @@ public final class WeatherManager {
      * 数据包重载（/reload）后把片模式缓存、已有天气状态与风暴能力位刷新到新的定义。
      * 不改变任何状态的类型 ID、计时器、手动标记或空间归属。
      */
+    /**
+     * 数据包重载后刷新片状态与风暴能力位。
+     *
+     * <p>调用方负责先让过滤器缓存失效（{@code WeatherBiomeFilter.invalidate()}），
+     * 本方法只处理存档状态与风暴派生位。</p>
+     */
     public static void refreshAfterDatapackReload(MinecraftServer server) {
         if (server == null) {
             return;
         }
-        WeatherBiomeFilter.invalidate();
         int states = 0;
         int storms = 0;
         for (ServerLevel level : server.getAllLevels()) {
@@ -614,8 +629,11 @@ public final class WeatherManager {
         return !level.dimensionType().hasSkyLight() || !level.dimensionType().hasCeiling();
     }
 
-    /** 该位置是否真的能淋到雨：头顶见天、高度图上方没有遮挡、且群系降水类型是雨。 */
+    /** 该位置是否真的能淋到雨：无天光维度没有「见天」概念，天气激活即可；有天光维度按见天 + 高度图 + 群系降水判定。 */
     private static boolean canPrecipitateAt(ServerLevel level, BlockPos pos) {
+        if (!level.dimensionType().hasSkyLight()) {
+            return true;
+        }
         return level.canSeeSky(pos)
                 && level.getHeightmapPos(Heightmap.Types.MOTION_BLOCKING, pos).getY() <= pos.getY()
                 && level.getBiome(pos).value().getPrecipitationAt(pos) == Biome.Precipitation.RAIN;
@@ -847,6 +865,17 @@ public final class WeatherManager {
     /** 玩家的客户端状态会被重建（登录/跨维度/重生），清掉缓存以便重新推送一次完整天气。 */
     public static void forget(UUID playerId) {
         LAST_SENT.remove(playerId);
+        WeatherEffects.forget(playerId);
+    }
+
+    /**
+     * 应用数据包定义的玩法效果：{@code effects.damage} 按周期对暴露中的玩家造成伤害，
+     * {@code effects.movement_speed} 作为乘算倍率挂在移动速度属性上。
+     * 实际执行交给 {@link WeatherEffects}，与移动模式共用同一份状态。
+     */
+    private static void applyEffects(ServerPlayer player, ServerLevel level, WeatherData.WeatherState state,
+                                     WeatherType type) {
+        WeatherEffects.apply(player, level, type, state.isWeatherActive());
     }
 
     /** 配置重载后清空 cell 查询缓存，让黑白名单/强制天气判定重新计算。 */
@@ -978,19 +1007,28 @@ public final class WeatherManager {
         // 原版雨/雪渲染与雷声都只有一条通道：自定义类型靠 hasPrecipitation/allowsThunder 决定是否借用它们。
         boolean raining = state.isRaining() && type.hasPrecipitation();
         boolean thundering = state.isThundering() && type.allowsThunder();
-        String typeKey = WeatherTypes.isBuiltin(state.typeId()) ? "" : type.displayKey();
+        boolean builtin = WeatherTypes.isBuiltin(state.typeId());
+        String typeKey = builtin ? "" : type.displayKey();
+        String typeId = builtin ? "" : state.typeId().toString();
         float targetRain = state.rainLevel();
         float targetThunder = state.thunderLevel();
+        // 展示强度：有降水的类型跟随雨量；无降水类型（雾/沙尘暴）按「是否处于天气现象中」给满值
+        float intensity = type.hasPrecipitation()
+                ? state.rainLevel()
+                : (state.isWeatherActive() ? 1.0F : 0.0F);
+        // 数据包定义的伤害/移速效果（只在片模式经过这里）
+        applyEffects(player, player.serverLevel(), state, type);
 
         SentState last = LAST_SENT.get(player.getUUID());
         if (last == null) {
             // 首次同步直接给目标值，避免刚进服就看到一段无意义的渐变
-            LAST_SENT.put(player.getUUID(), new SentState(raining, thundering, typeKey, targetRain, targetThunder));
+            LAST_SENT.put(player.getUUID(),
+                    new SentState(raining, thundering, typeKey, typeId, intensity, targetRain, targetThunder));
             player.connection.send(new ClientboundGameEventPacket(eventType(raining), 0.0F));
             player.connection.send(new ClientboundGameEventPacket(ClientboundGameEventPacket.RAIN_LEVEL_CHANGE, targetRain));
             player.connection.send(new ClientboundGameEventPacket(ClientboundGameEventPacket.THUNDER_LEVEL_CHANGE, targetThunder));
-            // HUD（Xaero 天气行）要的是目标值，不能等 5 秒渐变
-            player.connection.send(new WeatherStatePayload(raining, thundering, typeKey));
+            // HUD（Xaero 天气行）与客户端视觉层要的是目标值，不能等 5 秒渐变
+            player.connection.send(new WeatherStatePayload(raining, thundering, typeKey, typeId, intensity));
             return;
         }
 
@@ -999,7 +1037,8 @@ public final class WeatherManager {
         boolean changed = rainLevel != last.rainLevel || thunderLevel != last.thunderLevel;
         boolean targetChanged = last.raining != raining
                 || last.thundering != thundering
-                || !last.typeKey.equals(typeKey);
+                || !last.typeKey.equals(typeKey)
+                || !last.typeId.equals(typeId);
 
         last.rainLevel = rainLevel;
         last.thunderLevel = thunderLevel;
@@ -1016,10 +1055,12 @@ public final class WeatherManager {
         }
 
         if (targetChanged) {
-            // 只给 HUD 用；上面的雨量/雷量包仍按 0.01/tick 平滑，渲染保持原样
+            // 只给 HUD 与客户端视觉层用；上面的雨量/雷量包仍按 0.01/tick 平滑，渲染保持原样
             last.thundering = thundering;
             last.typeKey = typeKey;
-            player.connection.send(new WeatherStatePayload(raining, thundering, typeKey));
+            last.typeId = typeId;
+            last.intensity = intensity;
+            player.connection.send(new WeatherStatePayload(raining, thundering, typeKey, typeId, intensity));
         }
     }
 
@@ -1054,14 +1095,21 @@ public final class WeatherManager {
         private boolean thundering;
         /** 自定义天气的 HUD 显示键；内置类型/晴天为空串。 */
         private String typeKey;
+        /** 自定义天气的类型 id；内置类型/晴天为空串（用于客户端视觉层解析粒子/音效）。 */
+        private String typeId;
+        /** 展示强度：有降水类型跟随雨量，无降水类型是 0/1。 */
+        private float intensity;
         /** 上一次发给客户端的（平滑后）雨量/雷量，用来只在变化时发包。 */
         private float rainLevel;
         private float thunderLevel;
 
-        private SentState(boolean raining, boolean thundering, String typeKey, float rainLevel, float thunderLevel) {
+        private SentState(boolean raining, boolean thundering, String typeKey, String typeId, float intensity,
+                          float rainLevel, float thunderLevel) {
             this.raining = raining;
             this.thundering = thundering;
             this.typeKey = typeKey;
+            this.typeId = typeId;
+            this.intensity = intensity;
             this.rainLevel = rainLevel;
             this.thunderLevel = thunderLevel;
         }

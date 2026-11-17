@@ -11,12 +11,14 @@ import net.minecraft.core.Holder;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.StringRepresentable;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
 
-/** 数据驱动风暴档案：形状、阶段序列、环境调制参数与允许生成的生物群系。JSON 路径 data/<ns>/localizedrain/storm_profile/<id>.json。 */
+/** 数据驱动风暴档案：形状、阶段序列、环境调制参数、允许生成的维度与生物群系。JSON 路径 data/<ns>/localizedrain/storm_profile/<id>.json。 */
 public record StormProfile(int weight, boolean natural, double speedMultiplier, Range radius,
                            VerticalMode vertical, List<Stage> stages, Environment environment,
-                           List<StormBiomeSelector> biomes) {
+                           List<StormBiomeSelector> biomes, List<DimensionSelector> dimensions,
+                           SkylightMode skylight) {
 
     /** 竖直判定模式。 */
     public enum VerticalMode implements StringRepresentable {
@@ -102,6 +104,34 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
         ).apply(instance, Environment::new));
     }
 
+    /** 维度的天光要求，与 {@code dimensions} 列表叠加生效。 */
+    public enum SkylightMode implements StringRepresentable {
+        ANY("any"), REQUIRED("required"), FORBIDDEN("forbidden");
+
+        /** 容错版：未知值回退 {@link #ANY}，避免一个笔误中止整个世界加载。 */
+        public static final Codec<SkylightMode> CODEC = Codec.STRING.comapFlatMap(
+                value -> {
+                    for (SkylightMode mode : values()) {
+                        if (mode.name.equalsIgnoreCase(value)) {
+                            return DataResult.success(mode);
+                        }
+                    }
+                    Localizedrain.LOGGER.warn("[localizedrain] unknown storm skylight mode '{}', using any", value);
+                    return DataResult.success(ANY);
+                },
+                SkylightMode::getSerializedName);
+        private final String name;
+
+        SkylightMode(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String getSerializedName() {
+            return this.name;
+        }
+    }
+
     private static final Codec<StormProfile> RECORD_CODEC = RecordCodecBuilder.create(instance -> instance.group(
             Codec.INT.optionalFieldOf("weight", 10).forGetter(StormProfile::weight),
             Codec.BOOL.optionalFieldOf("natural", true).forGetter(StormProfile::natural),
@@ -112,7 +142,11 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
             Environment.CODEC.optionalFieldOf("environment", new Environment(true, 0.002D, 0.001D))
                     .forGetter(StormProfile::environment),
             StormBiomeSelector.CODEC.listOf().optionalFieldOf("biomes", List.of())
-                    .forGetter(StormProfile::biomes)
+                    .forGetter(StormProfile::biomes),
+            DimensionSelector.CODEC.listOf().optionalFieldOf("dimensions", List.of())
+                    .forGetter(StormProfile::dimensions),
+            SkylightMode.CODEC.optionalFieldOf("skylight", SkylightMode.ANY)
+                    .forGetter(StormProfile::skylight)
     ).apply(instance, StormProfile::new));
 
     /**
@@ -149,21 +183,54 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
         int weight = Math.max(1, profile.weight());
         double speed = Math.max(0.01D, profile.speedMultiplier());
         List<StormBiomeSelector> biomes = new ArrayList<>(profile.biomes().size());
-        boolean invalidBiome = false;
+        StormBiomeSelector firstInvalidBiome = null;
         for (StormBiomeSelector selector : profile.biomes()) {
             if (selector.kind() == StormBiomeSelector.Kind.INVALID) {
-                invalidBiome = true;     // 非法写法读档时丢弃，避免一个笔误中止整个世界加载
+                if (firstInvalidBiome == null) {
+                    firstInvalidBiome = selector;   // 非法写法读档时丢弃，避免一个笔误中止整个世界加载
+                }
                 continue;
             }
             if (!biomes.contains(selector)) {
                 biomes.add(selector);
             }
         }
+        List<DimensionSelector> dimensions = new ArrayList<>(profile.dimensions().size());
+        DimensionSelector firstInvalidDimension = null;
+        for (DimensionSelector selector : profile.dimensions()) {
+            if (selector.kind() == DimensionSelector.Kind.INVALID) {
+                if (firstInvalidDimension == null) {
+                    firstInvalidDimension = selector;
+                }
+                continue;
+            }
+            if (!dimensions.contains(selector)) {
+                dimensions.add(selector);
+            }
+        }
+        // 原列表非空但全部写错：保留一个非法项，让列表仍然「有限制」，
+        // 否则过滤后列表为空会被当成「不限制」，笔误反而变成全群系/全维度生成。
+        // INVALID 选择器的 test 恒为 false，所以结果就是该档案永远不匹配。
+        boolean biomeAllInvalid = biomes.isEmpty() && firstInvalidBiome != null;
+        if (biomeAllInvalid) {
+            biomes.add(firstInvalidBiome);
+        }
+        boolean dimensionAllInvalid = dimensions.isEmpty() && firstInvalidDimension != null;
+        if (dimensionAllInvalid) {
+            dimensions.add(firstInvalidDimension);
+        }
         StormProfile result = new StormProfile(weight, profile.natural(), speed,
                 new Range(minRadius, maxRadius), profile.vertical(), List.copyOf(stages), profile.environment(),
-                List.copyOf(biomes));
-        if (invalidBiome) {
+                List.copyOf(biomes), List.copyOf(dimensions), profile.skylight());
+        if (biomeAllInvalid) {
+            Localizedrain.LOGGER.warn("[localizedrain] storm profile has no valid biomes selectors; it will never spawn in any biome");
+        } else if (firstInvalidBiome != null) {
             Localizedrain.LOGGER.warn("[localizedrain] storm profile has invalid biomes selectors; ignored them");
+        }
+        if (dimensionAllInvalid) {
+            Localizedrain.LOGGER.warn("[localizedrain] storm profile has no valid dimensions selectors; it will never spawn in any dimension");
+        } else if (firstInvalidDimension != null) {
+            Localizedrain.LOGGER.warn("[localizedrain] storm profile has invalid dimensions selectors; ignored them");
         }
         if (!result.equals(profile)) {
             if (emptyStages) {
@@ -190,6 +257,29 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
     /** 是否显式声明了允许生成的生物群系列表。 */
     public boolean restrictsBiomes() {
         return !this.biomes.isEmpty();
+    }
+
+    /** 显式 dimensions 列表是否允许该维度；列表为空表示不限维度（任何已注册维度都行）。 */
+    public boolean allowsDimension(Level level) {
+        if (this.dimensions.isEmpty()) {
+            return true;
+        }
+        for (DimensionSelector selector : this.dimensions) {
+            if (selector.test(level)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 天光要求：{@code REQUIRED} 只允许有天光维度，{@code FORBIDDEN} 只允许无天光维度。 */
+    public boolean allowsSkylight(Level level) {
+        boolean skylit = level.dimensionType().hasSkyLight();
+        return switch (this.skylight) {
+            case ANY -> true;
+            case REQUIRED -> skylit;
+            case FORBIDDEN -> !skylit;
+        };
     }
 
     /** 显式 biomes 列表是否允许该群系；列表为空时返回 true（交给默认筛选）。 */

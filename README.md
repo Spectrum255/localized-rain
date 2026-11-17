@@ -14,48 +14,45 @@ Minecraft 原版的天气总是随机触发且全局生效的，这不合理。�
 
 ## 三种天气模式
 
-`weatherMode` 三选一，新世界默认为 `mobile`（移动云团）。运行期可用 `/weather mode <patches|mobile|vanilla>` 切换（约 1 秒内生效），也可直接编辑当前存档的 `weather.toml`；两种方式都会热重载，不需要重启游戏。
+本模组在原版天气系统之外增加了两种全新的天气模式，在配置文件中的`weatherMode` 中进行切换。
 
-| 模式        | 说明                                                       |
-| --------- | -------------------------------------------------------- |
-| `patches` | 3D 群系片天气：每一块连通的同群系区域（含洞穴、浮岛等立体结构）都有独立的天气状态                |
-| `mobile`  | 移动天气系统：天气由可漂移的「水平圆 + 竖直区间」风暴承载，根据风暴自身存储的状态进行有规律的演化         |
-| `vanilla` | 关闭本模组此功能，保持原版天气形式                                         |
+| 模式        | 说明                                                   |
+| --------- | ---------------------------------------------------- |
+| `patches` | 3D 群系轮廓天气系统：每一块连通的同群系区域（含洞穴、浮岛等立体结构）都有独立的天气状态        |
+| `mobile`  | 移动云团天气系统：天气由可漂移的「水平圆 + 竖直区间」风暴承载，根据风暴自身存储的状态进行有规律的演化 |
+| `vanilla` | 关闭本模组的新天气模式，天气状态全维度统一                                |
 
-三种模式互斥，各自的存档独立保留，切换时不做状态迁移。
+模组默认配置为移动云团模式。游戏进行时可用 `/weather mode <patches|mobile|vanilla>` 切换天气模式（约 1 秒内生效），也可直接编辑当前存档的 `weather.toml`。修改天气模式后，属于原本模式的天气状态将被存档，直到下一次切换回该模式后重新加载。
 
 ## 片模式（`patches`）
 
 - 已加载区块的群系片会按 `weatherSimulationIntervalTicks`（默认 20 tick）成批推进，未加载区域的天气状态将被冻结。
 - 每个片有自己的晴天计时器、降雨计时器、雷暴延迟与雷暴计时，数值取自配置的 tick 区间。
-- 雨量与雷量按 0.01/tick 渐变，跨片切换时天空与雨声约 5 秒过渡，不会瞬间跳变。
-- 支持自定义天气类型：类型以数据包 JSON 定义在 `localizedrain:weather_type`；只有加入自然池标签 `#localizedrain:natural`，或被写进对应群系的白名单后，该类型才会参与自然循环（详见 API 部分）。
+- 天气的渐变可以调节，默认配置下雨量与雷量按 0.01/tick 渐变，跨群系切换时，天空与雨声约有 5 秒过渡时间。
+- 该模式支持自定义天气类型：只有加入自然池标签 `#localizedrain:natural`，或被写进对应群系的白名单后，该类型才会参与自然循环（定义方式见「自定义数据包」）。
 - 不降水的群系（下界、末地原版群系，或 `Biome#hasPrecipitation()==false` 的群系）默认持续处于晴天状态。
 
 ## 移动模式（`mobile`）
 
-天气由**风暴**承载：每个风暴是一个水平圆 + 竖直区间，会随风场漂移，并按档案阶段演化。
+- 该模式下，天气由**风暴**承载：每个风暴是一个水平圆 + 竖直区间，会随风场漂移，并按档案阶段演化。
 
-- 风暴档案是数据包注册表 `localizedrain:storm_profile`。内置五个风暴档案：
-  `drizzle` / `shower` / `squall` / `thunderstorm`（自然，`surface`）与
-  `cave_rain`（`band`，非自然，供无天空光照/有天花板的维度使用）。
-  自定义档案放在 `data/<数据包命名空间>/localizedrain/storm_profile/<id>.json`：NeoForge 把注册表的命名空间
-  也作为目录前缀，所以路径里会出现两次 `localizedrain`；文件的命名空间就是档案 id 的命名空间。
-- 这些参数分别描述生成权重、是否自然生成、移动速度倍率、半径、竖直模式（`SURFACE` / `BAND` / `COLUMN`），
-  以及阶段类型、雨/雷强度、阶段时长与环境演化参数。
-- 风暴档案可以写 `"biomes": []` 限定生成群系，条目支持生物群系标签（`#minecraft:is_taiga`）、单个群系
-  （`minecraft:desert`）与整个命名空间（`minecraft:*`）。不写时走默认筛选：会下雨的 `SURFACE` 档案只落在
-  会降水的群系；显式写列表则完全以列表为准（例如沙尘暴可以写沙漠）。洞穴/整列档案不受默认降水限制。
-- 风暴档案也可以打标签：`data/<命名空间>/tags/localizedrain/storm_profile/<tag>.json`。模组内置
-  `#localizedrain:natural` 标签作为自然生成池：标签存在（且非空）时以标签成员为准，不存在时回退到档案里的
-  `"natural": true`。API 可读取：`StormProfiles.idsInTag(level, tag)`、`StormProfiles.tagIds(level, profileId)`。
+- 风暴档案以数据包注册表 `localizedrain:storm_profile` 的形式注册（定义方式见「自定义数据包」）。本模组内置了一些基本档案类型，包括
+  `drizzle` / `shower` / `squall` / `thunderstorm`（自然，`surface`）、
+  `cave_rain`（`band`，非自然，供无天空光照/有天花板的维度使用），以及「内置天气预设」一节里的 9 个档案。
+
+- `biomes` 参数将限定风暴的生成群系，留空时将使用默认过滤器；有降水标签的 `SURFACE` 档案只落在会降水的群系。当明确指定风暴生成的生物群系列表时，其生成位置则完全以列表为准（例如沙尘暴可以写沙漠）。洞穴/整列档案不受默认降水限制。\
+  不会产生某类天气的群系不会生成该类型的风暴，但已经生成的风暴飘过被过滤的群系时不受影响。
+
+- `/weather thunder` 也会匹配「自身不是 `thunder`、但 `allows_thunder=true`」的自定义类型
+  （例如本模组内置扩展包中，末地新增的虚空风暴）；`/weather rain` 同理匹配任何降水类型为雨的阶段，且不会覆盖档案自己的外观。
+
 - 每个维度有一套风场，风场方向每隔 `windChangeIntervalTicks` 做一次有界随机浮动。
-- 水分与温度决定风暴推进速度、是否提前进入下一阶段或消亡；自然生成遵守天气过滤器：不会产生某类天气的群系不会生成该类型的风暴，但已经生成的风暴飘过被过滤的群系时不受影响。
-- 客户端由完整快照驱动（每 `stormSyncIntervalTicks` 校正一次，生成/移除/换阶段立即推送）；
-  `isolatedBiomeWeather` 与 `falloffRatio` 随快照下发，联机时以服务端为准。
-- 落雷按风暴的雷量与 `lightningMultiplier` 概率生成；原版难度只影响骷髅马陷阱，陷阱会以 `visualOnly` 闪电代替伤害。
-- 强制天气在移动模式下的含义不同：`weatherBiomeOverrides` 只过滤自然风暴的生成点，不会为强制雨/雷的群系生成常驻降水（详见下方「群系天气过滤器」）。
-- 自然生成只在**已加载区块**内选点（实际半径 = 模拟距离 − 2 区块；模拟距离 12 时约 96–160 格），并沿上风向漂向玩家；每次检查按 `naturalStormSpawnChance`（默认 `0.035`，约 4.8 分钟一个）决定是否真正生成。`stormSpawnPlacement=anywhere_loaded` 时改为在任意已加载区块生成。
+
+- 温湿度参数决定风暴推进速度、是否提前进入下一阶段或消亡。
+
+- 落雷按风暴的雷量与 `lightningMultiplier` 概率生成；此配置同样会影响骷髅马陷阱。
+
+- 风暴的自然生成只会在**已加载区块**内选择坐标（实际半径 = 模拟距离 − 2 区块；模拟距离 12 时约 96–160 格），并沿上风向漂向玩家；每次生成检查时按 `naturalStormSpawnChance`（默认 `0.035`，约 4.8 分钟一个）决定是否真正生成。风暴默认为在玩家一定距离内生成，配置为`stormSpawnPlacement=anywhere_loaded` 时改为在任意已加载区块生成。
 
 ## 群系天气过滤器：白名单 / 黑名单 / 强制天气
 
@@ -70,25 +67,80 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 选择器支持具体群系、`命名空间:*` 与 `#群系标签`；天气支持类型 id、短名 `clear`/`rain`/`thunder`，
 白名单/黑名单还支持 `#天气标签`（默认自然池是 `#localizedrain:natural`，标签不存在时回退内置晴/雨/雷）。
 
-| 名单                      | 语义                                              |
-| ----------------------- | ----------------------------------------------- |
-| `weatherBiomeOverrides` | 天气锁：对应群系锁定为该天气；多条规则命中同一群系时按配置顺序取第一条            |
-| `weatherBiomeWhitelist` | 白名单：对应群系的自然循环只从天气白名单列表里抽取                       |
-| `weatherBiomeBlacklist` | 黑名单：对应群系永远不会出现列出的天气，在剩余天气里继续循环                  |
+| 名单                      | 语义                                  |
+| ----------------------- | ----------------------------------- |
+| `weatherBiomeOverrides` | 天气锁：对应群系锁定为该天气；多条规则命中同一群系时按配置顺序取第一条 |
+| `weatherBiomeWhitelist` | 白名单：对应群系的自然循环只从天气白名单列表里抽取           |
+| `weatherBiomeBlacklist` | 黑名单：对应群系永远不会出现列出的天气，在剩余天气里继续循环      |
 
-强制天气的作用分模式：
+天气锁的作用在两种模式下有所不同：
+
 - **片模式（`patches`）**：锁定该群系的天气，自然循环、命令、API 都无法改写；自然风暴也不会在该群系生成（已生成的风暴飘过时仍会降雨）。
-- **移动模式（`mobile`）**：降水只来自风暴。强制到具体天气（雨 / 雷 / 自定义类型）只用于**过滤自然风暴的生成点**，不会在该群系产生常驻降水；只有强制 `clear` 会阻止命令/API 的手动设置，强制雨/雷不再拦截手动设置。若希望在移动模式下让强制群系下雨，请手动生成风暴（`/weather rain`、`/weather storm ...` 或风暴 API）。
+- **移动模式（`mobile`）**：降水只来自风暴。强制到具体天气（雨 / 雷 / 自定义类型）只用于**过滤自然风暴的生成点**，不会在该群系产生常驻降水；只有强制 `clear` 会阻止命令/API 的手动设置。若希望在移动模式下让强制群系下雨，请手动生成风暴（`/weather rain`、`/weather storm ...` 或风暴相关的 API）。
 - 白名单/黑名单按风暴档案的**初始阶段类型**判定（多阶段档案不能用后续阶段绕过过滤）；强制天气则按档案的**任意阶段**匹配（雷暴档案的初始阶段也是雨）。
 - 手动风暴的半径：`/weather storm at|spawn|global` 与 API `setWeatherAt` 未指定半径时使用档案自身的 `radius` 区间（例如 `drizzle` 180–320）；`/weather storm area` 用「中心到区域最远角的距离 + 固定 64 格」作为半径，只生成一个圆形风暴近似覆盖整片区域。`band <minY> <maxY>` 子命令只指定竖直区间，不改变半径。
 
 白名单/黑名单只约束自然循环，使用指令仍然可以手动更改被排除的天气。
 
-## 天气类型与扩展 API
+## 内置天气预设
 
-`/reload` 后会重新解析天气类型与风暴档案，并按新定义刷新已有片状态与风暴的能力位（类型 ID、计时器、手动标记与空间归属都不变）；非法或已删除的类型会记录一次警告，不会被静默改成晴天。
+除了 `clear` / `rain` / `thunder`，jar 内还预置了 9 个额外天气类型和各自的自然风暴档案。它们与数据包内容走同一套注册表，可以用 `/weather type`、风暴档案、黑白名单和 `WeatherApi` 直接引用。
 
-天气类型是**数据包注册表** `localizedrain:weather_type`，内置 `clear` / `rain` / `thunder` 三个类型
+| 天气类型                      | 表现                           | 维度要求 | 自然风暴档案（权重）          |
+| ------------------------- | ---------------------------- | ---- | ------------------- |
+| `localizedrain:snow`      | 降雪（雪片粒子）                     | 有天光  | `snow`（14）          |
+| `localizedrain:blizzard`  | 暴风雪：密集雪片 + 冷雾 + 冻结伤害 + 减速    | 有天光  | `blizzard`（8，3 阶段）  |
+| `localizedrain:sandstorm` | 沙尘暴：白灰粒子 + 沙尘雾 + 伤害 + 减速     | 有天光  | `sandstorm`（8，2 阶段） |
+| `localizedrain:fog`       | 浓雾：低密度云粒子 + 灰雾               | 有天光  | `fog`（12）           |
+| `localizedrain:overcast`  | 阴天：云粒子 + 暗灰雾（不降水）            | 有天光  | `overcast`（18）      |
+| `localizedrain:ashstorm`  | 灰烬风暴：灰烬粒子 + 深灰雾 + 伤害 + 减速    | 下界   | `ashstorm`（6，2 阶段）  |
+| `localizedrain:soulmist`  | 灵魂薄雾：灵魂粒子 + 青雾 + 减速          | 下界   | `soulmist`（6）       |
+| `localizedrain:voidstorm` | 虚空风暴：传送门粒子 + 紫黑雾 + 魔法伤害 + 雷暴 | 末地   | `voidstorm`（4，2 阶段） |
+| `localizedrain:voidhaze`  | 虚空霾：传送门粒子 + 暗雾 + 减速          | 末地   | `voidhaze`（5）       |
+
+<br />
+
+- 这些预设天气**默认不参与自然生成**，如果想要开启它们的自然刷新，需要将`weather.toml`（或全局默认文件 `global-weather.toml`）里的 `enableBuiltinPresets` 设为true。
+- 每个预设天气都有同名的风暴档案。开启自然生成后，移动模式的自然风暴会抽取这些档案，群系片模式的天气类型则直接参与生物群系的天气循环。
+- 预设与数据包的关系（覆盖、移出自然池）见「自定义数据包 → 预设与数据包」。
+
+## 自定义数据包
+
+天气类型（`localizedrain:weather_type`）与风暴档案（`localizedrain:storm_profile`）都是数据包注册表：jar 内置内容、附属模组与外部数据包共用同一套注册表，同 id 的定义会互相覆盖。本节汇总所有与数据包相关的内容。
+
+### 数据包的位置与启用
+
+除了模组自带的 `data/`，也可以把数据包直接放进配置目录，或者作为普通数据包安装：
+
+```text
+config/localizedrain/datapacks/<name>/pack.mcmeta
+config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/storm_profile/<id>.json
+config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_type/<id>.json
+```
+
+- 每个子目录就是一个数据包，**必须带 `pack.mcmeta`**；缺少或损坏会被忽略并打警告。显示名取自 `pack.mcmeta` 的 `description`。
+
+- 目录名只允许 `a-z`、`0-9`、`_`、`.`、`-`，其他名字会被忽略并打警告。
+
+- 启动时会扫描目录，把每个包登记到 `config/localizedrain/datapacks.toml`（新包默认启用），可以按目录名逐个关闭：
+
+  ```toml
+  enabled = true          # 关闭后忽略整个 datapacks 目录
+
+  [packs]
+  # <pack.mcmeta 里的显示名>
+  "my-pack" = true
+  ```
+
+- 这些包只注册为**服务端数据包**（`SERVER_DATA`）：粒子、声音、语言文件等客户端资源必须放在资源包；自定义类型的 `display_key` 没有翻译时会显示原始键名。
+
+- 数据包仓库只在启动时组装，新增、删除、改名或修改开关后需要重启游戏；`/reload` 只会重读已经选中的包。
+
+- 这些包在列表里始终启用并排在内置内容之上，因此同 id 的档案/类型会覆盖内置定义；内置 `clear` 的能力位会被强制压回晴天并提示一次。
+
+### 天气类型
+
+天气类型是数据包注册表 `localizedrain:weather_type`，内置 `clear` / `rain` / `thunder` 三个类型
 （`data/localizedrain/localizedrain/weather_type/*.json`）。任何数据包都可以在
 `data/<命名空间>/localizedrain/weather_type/<id>.json` 新增类型：
 
@@ -96,23 +148,87 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 {
   "display": "沙尘暴",
   "display_key": "weather.mypack.sandstorm",
-  "has_precipitation": true,
-  "precipitation": "rain",
+  "has_precipitation": false,
+  "precipitation": "none",
   "allows_thunder": false,
-  "particle": "weatherplus:sandstorm",
-  "sound": "weatherplus:weather.sandstorm",
+  "particle": "minecraft:white_ash",
+  "sound": "minecraft:block.sand.break",
+  "particle_count": 140,
+  "sound_interval_ticks": 45,
+  "visuals": { "fog_color": "#8a7050", "fog_near": 8, "fog_far": 64 },
+  "effects": {
+    "damage": { "amount": 0.5, "interval_ticks": 60, "only_when_exposed": true, "type": "minecraft:generic" },
+    "movement_speed": 0.9
+  },
   "extra": { "color": "#d8c080" }
 }
 ```
 
 - `display` / `display_key`：显示名的纯文本或翻译键（`display` 优先；都没有时按 id 推导 `weather.<命名空间>.<路径>`）。
 - `has_precipitation` / `precipitation`（`none` / `rain` / `snow`）/ `allows_thunder`：判定用的能力位。
-- `particle` / `sound` / `extra`：**渲染提示，由制作方自行读取**。本模组不替自定义类型硬编码粒子与特殊效果，
-  只保证这些字段可读；自定义类型需要资源包读取它们（或由附属模组/资源包自行渲染）。
+- `particle` / `sound` / `particle_count`（默认 80）/ `sound_interval_ticks`（默认 40，0 = 不播）：
+  内置客户端视觉层会消费它们——`particle` 需是**简单粒子**（`SimpleParticleType`），按强度在玩家周围生成；
+  `sound` 按间隔播放环境音。想让自定义类型完全自绘，也可以只写 `extra`、让资源包自己读。
+- `visuals`：`fog_color`（`#rrggbb` 或 `0xrrggbb`）/ `fog_near` / `fog_far`，客户端按强度插值雾气。
+  `sky_darken` 字段已保留但**尚未被消费**。
+- `effects`：`damage`（`amount` / `interval_ticks` / `only_when_exposed` / `type` 伤害类型 id，
+  默认 `minecraft:generic`；`interval_ticks` 小于 10 会按 10 处理，因为原版受伤有 10 tick 无敌帧）与
+  `movement_speed`（移动速度乘数）。
+  片模式对位于该天气片内的玩家生效；移动模式对**被主导风暴覆盖**的玩家生效；
+  离开范围后移速与伤害计时自动复位，模式切换时不会残留叠加。
+- `requires_skylight`（默认 `false`）：为 `true` 时该类型只出现在**有天光**的维度（自然池与强制天气都会跳过它）；
+  无天光维度里仍可用 `/weather type` 显式设置。
+- `extra`：自由 JSON，模组原样保留、不解释。
 
 自定义类型可以直接用于风暴阶段、黑白名单、强制天气、`/weather type` 与 `WeatherApi`。
 若还想让它参与**自然循环**，需要把它加入自然池标签 `data/<命名空间>/tags/localizedrain/weather_type/natural.json`
 （标签存在时以内为准），或写进对应群系的白名单。
+
+### 风暴档案
+
+风暴档案放在 `data/<数据包命名空间>/localizedrain/storm_profile/<id>.json`：NeoForge 把注册表的命名空间
+也作为目录前缀，所以路径里会出现两次 `localizedrain`；文件的命名空间就是档案 id 的命名空间。
+
+- 这些参数分别描述生成权重、是否自然生成、移动速度倍率、半径、竖直模式（`SURFACE` / `BAND` / `COLUMN`），
+  以及阶段类型、雨/雷强度、阶段时长与环境演化参数。
+- 风暴档案可以写 `"biomes": []` 限定生成群系，条目支持生物群系标签（`#minecraft:is_taiga`）、单个群系
+  （`minecraft:desert`）与整个命名空间（`minecraft:*`）。不写时走默认筛选：会下雨的 `SURFACE` 档案只落在
+  会降水的群系；显式写列表则完全以列表为准（例如沙尘暴可以写沙漠）。洞穴/整列档案不受默认降水限制。
+- 风暴档案也可以打标签：`data/<命名空间>/tags/localizedrain/storm_profile/<tag>.json`。模组内置
+  `#localizedrain:natural` 标签作为自然生成池：标签存在（且非空）时以标签成员为准，不存在时回退到档案里的
+  `"natural": true`。API 可读取：`StormProfiles.idsInTag(level, tag)`、`StormProfiles.tagIds(level, profileId)`。
+
+### 维度与天空光照
+
+**维度兼容**：风暴档案的 `dimensions` 字段支持维度 id、维度类型 id、`命名空间:*` 和 `#维度类型标签`
+（如 `"dimensions": ["#minecraft:is_overworld", "mypack:aether"]`），空列表表示不限维度。
+因此**任何注册表维度（包括数据包新增的维度）只要维度类型有天光、且档案/群系规则允许，就会正常生成天气与风暴；
+本模组不再硬编码主世界**。
+写错的 `biomes` / `dimensions` 选择器会被丢弃并打警告；如果**整个列表都写错，档案会保留「有限制」标记，
+因此它在任何群系/维度都不会生成（而不是因为列表变空变成不限维度）**。
+
+档案还可以写 `skylight`：`any`（默认）/ `required`（只在天光维度）/ `forbidden`（只在无天光维度）。
+内置的暴风雪、沙尘暴、雾、阴天为 `required`，灰烬风暴、灵魂薄雾、虚空风暴、虚空霾为 `forbidden`；
+其中灰烬风暴与灵魂薄雾用 `"dimensions": ["minecraft:the_nether"]` 限定下界，虚空风暴与虚空霾用 `"dimensions": ["minecraft:the_end"]` 限定末地。
+
+无天空光照或有天花板的维度（下界、自定义洞穴维度）：片模式天气照常推进（降水判定不再要求「见天」），
+移动模式不生成 `SURFACE` 风暴，但允许 **BAND 风暴**——在玩家高度附近取一条竖直带，档案需满足 `skylight`/`requires_skylight` 约束。
+
+### 预设与数据包
+
+自定义数据包可以覆盖预设中同 id 的类型/档案，也可以把预设从 `#localizedrain:natural` 标签里移除，不再参与自然生成。
+
+### 无法用数据包表达的部分
+
+配置界面（来自代码里的 `ModConfigSpec`/自管理 TOML，数据包内容不会自动出现在界面，
+改完用 `/reload`）、schema 外的任意玩法逻辑、自定义粒子的复杂行为、天空盒/shader 等自定义渲染——
+这些仍需附属模组或客户端代码。
+
+## 天气类型与扩展 API
+
+`/reload` 后会重新解析天气类型与风暴档案，并按新定义刷新已有片状态与风暴的能力位（类型 ID、计时器、手动标记与空间归属都不变）；非法或已删除的类型会清空能力位并记录一次警告，手动设置的类型被删除后会立即回到晴天。
+
+天气类型与风暴档案的 JSON 定义、标签、维度与天光规则见「自定义数据包」。
 
 判定与查询入口：
 
@@ -131,7 +247,7 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 1. 安装 Minecraft 1.21.1 对应的 NeoForge（21.1.265 或更高）。
 2. 服务器和客户端都需要安装本模组。
 
-> 客户端与服务端必须使用同一版本（网络协议 `"7"`）。版本不一致时连接不会断开，
+> 客户端与服务端必须使用同一版本（网络协议 `"8"`）。版本不一致时连接不会断开，
 > 但登录时会收到提示、服务端日志会记录警告，风暴/天气同步会静默失效。
 
 ## 快速上手
@@ -154,47 +270,35 @@ weatherBiomeBlacklist = ["#minecraft:is_ocean=thunder"]
 
 配置文件分为全局与存档两级：
 
-| 文件 | 位置 | 主菜单可编辑 | 内容 |
-| --- | --- | --- | --- |
-| `common.toml` | `config/localizedrain/`（全局） | 是 | 调试开关（`debugLogging` / `logWeatherChanges` / `logStormSpawns` / `logStormSpawnsToChat`），所有存档共用 |
-| `global-weather.toml` | `config/localizedrain/`（全局） | 是 | **新存档**的天气默认值（天气模式、模拟区间、移动风暴参数） |
-| `global-filters.toml` | `config/localizedrain/`（全局） | 是 | **新存档**的天气过滤器默认值（群系=天气） |
-| `weather.toml` | `<存档>/serverconfig/localizedrain/` | 否（进游戏后编辑） | 当前存档的天气设置；创建存档时从 `global-weather.toml` 复制 |
-| `filters.toml` | `<存档>/serverconfig/localizedrain/` | 否（进游戏后编辑） | 当前存档的天气过滤器；创建存档时从 `global-filters.toml` 复制 |
+| 文件                    | 位置                                 | 主菜单可编辑    | 内容                                                                                            |
+| --------------------- | ---------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
+| `common.toml`         | `config/localizedrain/`（全局）        | 是         | 调试开关（`debugLogging` / `logWeatherChanges` / `logStormSpawns` / `logStormSpawnsToChat`），所有存档共用 |
+| `datapacks.toml`      | `config/localizedrain/`（全局）        | 否（手动编辑文件） | 配置目录数据包的总开关与逐包开关（说明见「自定义数据包」）；启动时自动登记新包                                                       |
+| `global-weather.toml` | `config/localizedrain/`（全局）        | 是         | **新存档**的天气默认值（天气模式、模拟区间、移动风暴参数）                                                               |
+| `global-filters.toml` | `config/localizedrain/`（全局）        | 是         | **新存档**的天气过滤器默认值（群系=天气）                                                                       |
+| `weather.toml`        | `<存档>/serverconfig/localizedrain/` | 否（进游戏后编辑） | 当前存档的天气设置；创建存档时从 `global-weather.toml` 复制                                                     |
+| `filters.toml`        | `<存档>/serverconfig/localizedrain/` | 否（进游戏后编辑） | 当前存档的天气过滤器；创建存档时从 `global-filters.toml` 复制                                                    |
 
 全局文件可以在游戏主菜单的「模组 → Localized Rain → 配置」里编辑（服务端配置只有在世界运行时才能编辑，所以默认值单独拆成全局文件），它决定**新世界**的初始值，不会影响已有存档。新建存档时，模组会把 `global-weather.toml` / `global-filters.toml` 复制为 `<存档>/serverconfig/localizedrain/weather.toml` / `filters.toml`，之后两者互不影响；当前存档的值请在游戏内「服务端选项」里修改。旧版 `config/localizedrain-common.toml` 会在启动时自动拆分迁移：天气/风暴键 → `global-weather.toml`，三个过滤器列表 → `global-filters.toml`，调试键 → `common.toml`（目标文件已存在则跳过；旧文件保留作备份）。已有存档中仍为默认 `PATCHES` 的 `weatherMode` 会跟随旧文件迁移一次（迁移后在存档目录留下 `.weatherMode-migrated` 标记，之后手动改回 `PATCHES` 不会被再次覆盖），每个存档自己选过的模式不会被覆盖。
-
-### 配置目录数据包
-
-除了模组自带的 `data/`，也可以把数据包直接放进配置目录：
-
-```text
-config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/storm_profile/<id>.json
-config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_type/<id>.json
-```
-
-- 每个子目录就是一个数据包，`pack.mcmeta` 可省略；目录名只允许 `a-z`、`0-9`、`_`、`.`、`-`，其他名字会被忽略并打警告。
-- `datapacks.toml` 里的 `loadConfigDatapacks`（默认 `true`）控制是否加载整个目录；设为 `false` 后这些数据包不会进入数据包仓库。
-- 数据包仓库只在启动时组装，新增、删除或改名后需要重启游戏；`/reload` 只会重读已经选中的包。
-- 这些数据包在列表里始终启用并排在内置内容之上，因此同 id 的档案/类型会覆盖内置定义。
 
 以下为主要配置项（默认值）。
 
 ### 通用与片模式
 
-| 键                                | 默认        | 说明                                     |
-| -------------------------------- | --------- | -------------------------------------- |
-| `weatherMode`                    | `mobile`  | `patches` / `mobile` / `vanilla`；新世界默认 `mobile`，运行期热切换（约 1 秒生效，也可用 `/weather mode` 命令） |
-| `weatherSimulationIntervalTicks` | `20`      | 已加载群系片的推进间隔，越大越省性能                       |
-| `scan3dSubstates`                | `true`    | 是否扫描洞穴/浮岛等 3D 子状态                      |
-| `stateRetentionDays`             | `7`       | 片状态保留天数，`0` 关闭时间清理                     |
-| `maxStoredStates`                | `4096`    | 存档中片状态上限                               |
-| `maxParentEntries`               | `16384`   | 并查集父表硬上限                               |
-| `maxColumnScansPerTick`          | `4`       | 每 tick 最多新扫描的列数                        |
-| `debugLogging`                   | `false`   | 输出片扫描/合并的调试日志                                 |
-| `logWeatherChanges`              | `false`   | 群系片天气变化时输出位置与类型                           |
-| `logStormSpawns`                 | `false`   | 风暴生成时输出详细参数（调试用，默认关闭）                     |
-| `logStormSpawnsToChat`           | `false`   | 风暴生成时在聊天栏报告中心坐标与类型（调试用，默认关闭）      |
+| 键                                | 默认       | 说明                                                                                     |
+| -------------------------------- | -------- | -------------------------------------------------------------------------------------- |
+| `weatherMode`                    | `mobile` | `patches` / `mobile` / `vanilla`；新世界默认 `mobile`，运行期热切换（约 1 秒生效，也可用 `/weather mode` 命令） |
+| `enableBuiltinPresets`           | `false`  | 是否让模组自带的 9 个新增天气预设参与自然天气/自然风暴；关闭时仍可手动设置或被数据包引用                                         |
+| `weatherSimulationIntervalTicks` | `20`     | 已加载群系片的推进间隔，越大越省性能                                                                     |
+| `scan3dSubstates`                | `true`   | 是否扫描洞穴/浮岛等 3D 子状态                                                                      |
+| `stateRetentionDays`             | `7`      | 片状态保留天数，`0` 关闭时间清理                                                                     |
+| `maxStoredStates`                | `4096`   | 存档中片状态上限                                                                               |
+| `maxParentEntries`               | `16384`  | 并查集父表硬上限                                                                               |
+| `maxColumnScansPerTick`          | `4`      | 每 tick 最多新扫描的列数                                                                        |
+| `debugLogging`                   | `false`  | 输出片扫描/合并的调试日志                                                                          |
+| `logWeatherChanges`              | `false`  | 群系片天气变化时输出位置与类型                                                                        |
+| `logStormSpawns`                 | `false`  | 风暴生成时输出详细参数（调试用，默认关闭）                                                                  |
+| `logStormSpawnsToChat`           | `false`  | 风暴生成时在聊天栏报告中心坐标与类型（调试用，默认关闭）                                                           |
 
 ### 天气节奏（tick）
 
@@ -207,27 +311,27 @@ config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_typ
 
 ### 移动模式
 
-| 键                                       | 默认              | 说明                                    |
-| --------------------------------------- | --------------- | ------------------------------------- |
-| `isolatedBiomeWeather`                  | `clear`         | 隔离群系里的行为：`clear` / `patch` / `manual` |
-| `naturalCaveStorms`                     | `false`         | 是否自然生成洞穴风暴                            |
-| `caveStormRadius`                       | `64`            | 自然洞穴风暴半径                              |
-| `maxStormsPerDimension`                 | `8`             | 自然风暴上限（手动风暴不占名额）                      |
-| `maxStormsPerPlayer`                    | `2`             | 每位玩家附近自然风暴上限                          |
-| `maxManualStormsPerDimension`           | `16`            | 手动风暴上限（命令/API）                        |
-| `spawnIntervalTicks`                    | `200`           | 自然生成检查间隔                              |
-| `spawnMinDistance` / `spawnMaxDistance` | `300` / `700`   | 生成点与玩家的距离范围（超出模拟距离时自动收敛）              |
-| `naturalStormSpawnChance`               | `0.035`         | 每次检查真正生成自然风暴的概率（约 4.8 分钟一个；0 = 关闭）     |
-| `stormSpawnPlacement`                    | `near_player`   | 自然风暴生成位置：`near_player`（玩家附近，受每玩家上限约束）/ `anywhere_loaded`（任意已加载区块，不受每玩家上限约束） |
-| `windChangeIntervalTicks`               | `1200`          | 风场变化间隔                                |
-| `windMinSpeed` / `windMaxSpeed`         | `0.02` / `0.08` | 风速范围（格/tick）                          |
-| `despawnDistance`                       | `1000`          | 自然风暴远离玩家的消亡距离                         |
-| `despawnGraceTicks`                     | `600`           | 远离多久后开始淡出                             |
-| `stormSyncIntervalTicks`                | `40`            | 风暴快照校正间隔                              |
-| `falloffRatio`                          | `0.3`           | 风暴边缘的衰减宽度比例                           |
-| `lightningMultiplier`                   | `1.0`           | 落雷概率倍率，`0` 关闭                         |
-| `stormRadiusBase`                       | `0.0`           | 新生成风暴的基准半径（方块）；`0` = 使用档案自带的 `radius` 区间 |
-| `stormRadiusVariance`                   | `0.3`           | 基准半径的浮动率（`0.3` = ±30%），仅在 `stormRadiusBase > 0` 时生效 |
+| 键                                       | 默认              | 说明                                                                          |
+| --------------------------------------- | --------------- | --------------------------------------------------------------------------- |
+| `isolatedBiomeWeather`                  | `clear`         | 隔离群系里的行为：`clear` / `patch` / `manual`                                       |
+| `naturalCaveStorms`                     | `false`         | 是否自然生成洞穴风暴                                                                  |
+| `caveStormRadius`                       | `64`            | 自然洞穴风暴半径                                                                    |
+| `maxStormsPerDimension`                 | `8`             | 自然风暴上限（手动风暴不占名额）                                                            |
+| `maxStormsPerPlayer`                    | `2`             | 每位玩家附近自然风暴上限                                                                |
+| `maxManualStormsPerDimension`           | `16`            | 手动风暴上限（命令/API）                                                              |
+| `spawnIntervalTicks`                    | `200`           | 自然生成检查间隔                                                                    |
+| `spawnMinDistance` / `spawnMaxDistance` | `300` / `700`   | 生成点与玩家的距离范围（超出模拟距离时自动收敛）                                                    |
+| `naturalStormSpawnChance`               | `0.035`         | 每次检查真正生成自然风暴的概率（约 4.8 分钟一个；0 = 关闭）                                          |
+| `stormSpawnPlacement`                   | `near_player`   | 自然风暴生成位置：`near_player`（玩家附近，受每玩家上限约束）/ `anywhere_loaded`（任意已加载区块，不受每玩家上限约束） |
+| `windChangeIntervalTicks`               | `1200`          | 风场变化间隔                                                                      |
+| `windMinSpeed` / `windMaxSpeed`         | `0.02` / `0.08` | 风速范围（格/tick）                                                                |
+| `despawnDistance`                       | `1000`          | 自然风暴远离玩家的消亡距离                                                               |
+| `despawnGraceTicks`                     | `600`           | 远离多久后开始淡出                                                                   |
+| `stormSyncIntervalTicks`                | `40`            | 风暴快照校正间隔                                                                    |
+| `falloffRatio`                          | `0.3`           | 风暴边缘的衰减宽度比例                                                                 |
+| `lightningMultiplier`                   | `1.0`           | 落雷概率倍率，`0` 关闭                                                               |
+| `stormRadiusBase`                       | `0.0`           | 新生成风暴的基准半径（方块）；`0` = 使用档案自带的 `radius` 区间                                    |
+| `stormRadiusVariance`                   | `0.3`           | 基准半径的浮动率（`0.3` = ±30%），仅在 `stormRadiusBase > 0` 时生效                         |
 
 ## 兼容性
 
@@ -245,10 +349,9 @@ config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_typ
 - 客户端雨雪粒子按玩家所在片/风暴的总体雨量渲染，不做逐方块局部化；站在雨区边缘时，
   相邻晴天区域也可能看到雨丝。
 - 群系片按水平 16 方块、垂直 4 方块量化；未加载区域冻结，查询时按晴天处理。
-- 自然风暴只在「有天光且无天花板」的维度生成；`SURFACE` 手动风暴在无天光维度会被拒绝，
-  但 `BAND` / `COLUMN` 洞穴风暴仍可手动生成。
-- 地下 `BAND` / `COLUMN` 风暴只下雨、不落雷（落雷要求落点正上方有开口 `canSeeSky`）；
-  无天光/带天花板维度里的非 `SURFACE` 雷暴会被直接拒绝。
+- 自然风暴：有天空光照的维度允许生成 `SURFACE` 风暴；无天空光照/带天花板的维度只生成 `BAND` 风暴，
+  可用档案由 `skylight` 与阶段类型的 `requires_skylight` 决定。
+- 无天光维度的 `BAND` / `COLUMN` 风暴可以落雷；有天光维度仍要求落点正上方有开口（`canSeeSky`）。
 - 服务器停止/换存档会清空风暴静态缓存；配置重载会复位一次性警告。
 - 移动模式下 `weatherBiomeOverrides` 强制到具体天气（雨/雷/自定义类型）不会自动产生降水：该设置只过滤自然风暴的生成点，需要降水时请手动生成风暴，或改用片模式。
 

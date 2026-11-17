@@ -1,0 +1,11 @@
+{
+  "display_key": "weather.localizedrain.snow",
+  "has_precipitation": true,
+  "precipitation": "snow",
+  "allows_thunder": false,
+  "particle": "minecraft:snowflake",
+  "sound": "minecraft:weather.rain",
+  "particle_count": 60,
+  "sound_interval_ticks": 60,
+  "visuals": { "fog_color": "#dfe6ee", "fog_near": 24, "fog_far": 120 }
+}

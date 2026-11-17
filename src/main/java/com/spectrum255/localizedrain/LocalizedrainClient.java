@@ -27,7 +27,12 @@ public class LocalizedrainClient {
             // 风暴位置每 tick 外推，再按距离/高度算目标雨雷量写回原版通道
             com.spectrum255.localizedrain.client.ClientStormCache.tick();
             com.spectrum255.localizedrain.client.ClientStormWeather.tick(Minecraft.getInstance());
+            // 自定义天气的粒子/环境音/雾效
+            com.spectrum255.localizedrain.client.ClientWeatherVisuals.tick(Minecraft.getInstance());
         });
+        // 自定义天气的雾效：只覆盖写了 visuals 字段的类型，内置类型保持原版
+        NeoForge.EVENT_BUS.addListener(com.spectrum255.localizedrain.client.ClientWeatherVisuals::applyFogColor);
+        NeoForge.EVENT_BUS.addListener(com.spectrum255.localizedrain.client.ClientWeatherVisuals::applyFogPlanes);
         NeoForge.EVENT_BUS.addListener((ClientPlayerNetworkEvent.LoggingOut event) -> {
             ClientWeatherHooks.onLoggingOut();
             com.spectrum255.localizedrain.client.ClientStormCache.clear();

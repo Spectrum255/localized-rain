@@ -8,50 +8,51 @@ Localized Rain is a weather mod for Minecraft 1.21.1 / NeoForge.
 
 ## What does it do?
 
-Vanilla Minecraft weather is always triggered at random and applies to the entire dimension, which makes little sense. This mod completely rebuilds the weather system so that weather is localized to an area.
+Vanilla Minecraft weather is always triggered at random and applies to the entire dimension, which makes little sense. This mod completely rebuilds the weather system so that weather only applies within a range.
 
 <br />
 
 ## Three weather modes
 
-`weatherMode` picks one of three modes. Newly created worlds default to `mobile` (moving storms). Switch it at runtime with `/weather mode <patches|mobile|vanilla>` (takes effect within about a second), or edit the save's `weather.toml`; both are hot-reloaded without restarting the game.
+The mod adds two new weather modes on top of vanilla weather; pick one with `weatherMode` in the config file.
 
-| Mode      | Description                                                                                                             |
-| --------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Mode      | Description                                                                                                                        |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `patches` | 3D biome-patch weather: every connected region of the same biome (including caves, floating islands and other 3D structures) gets its own independent weather state |
-| `mobile`  | Mobile weather system: weather is carried by drifting storms, each a horizontal circle plus a vertical range, evolving according to the state stored in the storm itself                          |
-| `vanilla` | Disables this feature of the mod and keeps vanilla weather                                                                |
+| `mobile`  | Moving storm weather: weather is carried by drifting storms (a horizontal circle plus a vertical range), evolving according to the state stored in the storm itself |
+| `vanilla` | Disables the mod's new weather modes; weather is dimension-wide again                                                               |
 
-The three modes are mutually exclusive. Each keeps its own save data, and no state is migrated when you switch.
+The mod defaults to the moving storm mode. While playing, switch with `/weather mode <patches|mobile|vanilla>` (takes effect within about a second), or edit the current save's `weather.toml`. After changing the mode, the weather state that belonged to the previous mode is saved and is reloaded the next time you switch back to that mode.
 
 ## Patch mode (`patches`)
 
 - Biome patches in loaded chunks are advanced in batches every `weatherSimulationIntervalTicks` (20 ticks by default); weather in unloaded areas is frozen.
 - Each patch has its own clear timer, rain timer, thunder delay and thunder timer, with values drawn from the configured tick ranges.
-- Rain and thunder levels ease at 0.01/tick, so sky and rain sound transition over roughly 5 seconds when moving between patches instead of snapping.
-- Custom weather types are supported as datapack entries in `localizedrain:weather_type`: a type only joins natural cycling if it is added to the natural-pool tag `#localizedrain:natural`, or written into the whitelist of the corresponding biome (see the API section).
+- Weather transitions are adjustable: by default rain and thunder levels ease at 0.01/tick, so sky and rain sound transition over roughly 5 seconds when crossing biome borders.
+- Custom weather types are supported: a type only joins natural cycling if it is added to the natural-pool tag `#localizedrain:natural`, or written into the whitelist of the corresponding biome (see "Custom datapacks").
 - Biomes without precipitation (vanilla Nether/End biomes, or any biome with `Biome#hasPrecipitation()==false`) stay clear by default.
 
 ## Mobile mode (`mobile`)
 
-Weather is carried by **storms**: each storm is a horizontal circle plus a vertical range, drifts with the wind field and evolves through the stages of a profile.
+- In this mode, weather is carried by **storms**: each storm is a horizontal circle plus a vertical range, drifts with the wind field and evolves through the stages of a profile.
 
-- Storm profiles live in the datapack registry `localizedrain:storm_profile`. Five profiles are built in:
-  `drizzle` / `shower` / `squall` / `thunderstorm` (natural, `surface`) and
-  `cave_rain` (`band`, non-natural, for dimensions without sky light or with a ceiling).
-  Custom profiles go to `data/<pack namespace>/localizedrain/storm_profile/<id>.json`: NeoForge prefixes the
-  directory with the registry namespace too, so the path contains `localizedrain` twice; the file's namespace
-  becomes the namespace of the profile id.
-- The parameters describe spawn weight, whether the profile spawns naturally, movement speed multiplier, radius, vertical mode (`SURFACE` / `BAND` / `COLUMN`), as well as stage types, rain/thunder intensity, stage durations and environmental evolution parameters.
-- A profile may add `"biomes": []` to restrict where it spawns. Entries accept biome tags (`#minecraft:is_taiga`), a single biome (`minecraft:desert`) or a whole namespace (`minecraft:*`). When the field is omitted the default filter applies: a `SURFACE` profile with any rain-producing stage only spawns in biomes that have precipitation; an explicit list overrides that (e.g. a sandstorm can list deserts). Cave/column profiles are not subject to the default precipitation rule.
-- Storm profiles can also carry tags: `data/<namespace>/tags/localizedrain/storm_profile/<tag>.json`. The mod ships `#localizedrain:natural` as the natural spawn pool: when the tag exists (and is non-empty) its members are used, otherwise the per-profile `"natural": true` flag is used. APIs: `StormProfiles.idsInTag(level, tag)` and `StormProfiles.tagIds(level, profileId)`.
+- Storm profiles are registered as the datapack registry `localizedrain:storm_profile` (see "Custom datapacks"). The mod ships some basic profiles, including
+  `drizzle` / `shower` / `squall` / `thunderstorm` (natural, `surface`),
+  `cave_rain` (`band`, non-natural, for dimensions without sky light or with a ceiling), and the 9 profiles described in "Built-in weather presets".
+
+- The `biomes` parameter restricts where a storm may spawn; when omitted, the default filter applies: a `SURFACE` profile with precipitation only spawns in biomes that have precipitation. When an explicit biome list is given, spawning follows that list exactly (for example a sandstorm may list deserts). Cave/column profiles are not subject to the default precipitation rule.
+  A biome that cannot produce a weather type never spawns that type of storm, but storms that already exist are unaffected when they drift over a filtered biome.
+
+- `/weather thunder` also matches custom types that are not `thunder` but have `allows_thunder=true`
+  (for example the End's voidstorm added by the mod's built-in expansion pack); `/weather rain` likewise matches any stage whose precipitation is rain, without overriding the profile's own appearance.
+
 - Each dimension has its own wind field; the wind direction performs a bounded random walk every `windChangeIntervalTicks`.
-- Moisture and temperature decide how fast a storm advances, whether it enters the next stage early, or dies. Natural spawning obeys the weather filters: a biome that cannot produce a weather type never spawns that type of storm, but storms that already exist are unaffected when they drift over a filtered biome.
-- The client is driven by full snapshots (corrected every `stormSyncIntervalTicks`, pushed immediately on spawn/remove/stage change);
-  `isolatedBiomeWeather` and `falloffRatio` are delivered with these snapshots, so on a server the server's values win.
-- Lightning is generated with a probability based on the storm's thunder level and `lightningMultiplier`; vanilla difficulty only affects the skeleton-horse trap, which replaces the damaging bolt with a `visualOnly` one.
-- Forced weather means something different in mobile mode: `weatherBiomeOverrides` only filters natural storm spawn points and does not create persistent precipitation for forced rain/thunder biomes (see "Biome weather filters" below).
-- Natural spawning only picks points inside loaded chunks (the effective radius is the simulation distance minus 2 chunks; about 96–160 blocks at simulation distance 12) and drifts toward the player from upwind; each check rolls `naturalStormSpawnChance` (default `0.035`, roughly one storm every 4.8 minutes) to decide whether a storm actually spawns. With `stormSpawnPlacement=anywhere_loaded` it instead spawns at a random loaded chunk.
+
+- Moisture and temperature decide how fast a storm advances, whether it enters the next stage early, or dies.
+
+- Lightning is generated with a probability based on the storm's thunder level and `lightningMultiplier`; the same setting also affects the skeleton-horse trap.
+
+- Natural spawning only picks points inside **loaded chunks** (the effective radius is the simulation distance minus 2 chunks; about 96–160 blocks at simulation distance 12) and drifts toward the player from upwind; each check rolls `naturalStormSpawnChance` (default `0.035`, roughly one storm every 4.8 minutes) to decide whether a storm actually spawns. Storms spawn within a certain distance of players by default; with `stormSpawnPlacement=anywhere_loaded` they spawn in any loaded chunk instead.
 
 ## Biome weather filters: whitelist / blacklist / forced weather
 
@@ -69,23 +70,78 @@ Selectors accept a concrete biome, a `namespace:*` pattern, or a `#biome_tag`; w
 
 | List                    | Semantics                                                                                          |
 | ----------------------- | -------------------------------------------------------------------------------------------------- |
-| `weatherBiomeOverrides` | Weather lock: the biome is forced to this weather; when several rules match the same biome, the first rule in config order wins |
+| `weatherBiomeOverrides` | Weather lock: the biome is locked to this weather; when several rules match the same biome, the first rule in config order wins |
 | `weatherBiomeWhitelist` | Whitelist: natural cycling for the biome only draws from this weather list                          |
 | `weatherBiomeBlacklist` | Blacklist: the listed weathers never occur in the biome; cycling continues among the remaining ones |
 
-Forced weather behaves differently per mode:
-- **Patch mode (`patches`)**: locks the biome's weather: natural cycling, commands and the API cannot override it, and natural storms never spawn in that biome (storms that already exist still rain when they drift over it).
-- **Mobile mode (`mobile`)**: precipitation only comes from storms. Forcing a concrete weather (rain / thunder / custom type) only acts as a **natural-storm spawn-point filter** and does not create persistent precipitation in that biome; only forced `clear` blocks manual commands/API, while forced rain/thunder no longer blocks them. To get rain in a forced biome under mobile mode, spawn a storm manually (`/weather rain`, `/weather storm ...`, or the storm API).
-- Natural storms are evaluated against the profile's **initial stage type** for whitelist/blacklist (a multi-stage profile cannot bypass the filter through later stages); forced weather matches **any stage** of the profile (a thunderstorm profile starts with rain).
+The weather lock behaves differently per mode:
+
+- **Patch mode (`patches`)**: locks the biome's weather; natural cycling, commands and the API cannot override it, and natural storms never spawn in that biome (storms that already exist still rain when they drift over it).
+- **Mobile mode (`mobile`)**: precipitation only comes from storms. Forcing a concrete weather (rain / thunder / custom type) only acts as a **natural-storm spawn-point filter** and does not create persistent precipitation in that biome; only forced `clear` blocks manual commands/API. To get rain in a forced biome under mobile mode, spawn a storm manually (`/weather rain`, `/weather storm ...`, or the storm API).
+- Whitelist/blacklist are evaluated against the profile's **initial stage type** (a multi-stage profile cannot bypass the filter through later stages); forced weather matches **any stage** of the profile (a thunderstorm profile starts with rain).
 - Manual storm radius: `/weather storm at|spawn|global` and the `setWeatherAt` API use the profile's own `radius` range when no radius is given (e.g. `drizzle` 180–320); `/weather storm area` uses "distance from the center to the farthest corner of the area + a fixed 64 blocks" and spawns a single circular storm as an approximation. The `band <minY> <maxY>` subcommand only sets the vertical range and does not change the radius.
 
 Whitelist/blacklist only constrain natural cycling; commands can still manually set weather that has been excluded.
 
-## Weather types and extension API
+## Built-in weather presets
 
-After `/reload` the mod re-parses weather types and storm profiles, then refreshes the capability bits of existing patch states and storms (type IDs, timers, manual flags and spatial ownership are unchanged). Invalid or deleted types log a single warning instead of being silently turned into clear weather.
+Besides `clear` / `rain` / `thunder`, the jar ships 9 extra weather types and their own natural storm profiles. They use the same registries as datapack content and can be referenced directly by `/weather type`, storm profiles, whitelist/blacklist and `WeatherApi`.
 
-Weather types are a **datapack registry** `localizedrain:weather_type`, with built-in `clear` / `rain` / `thunder`
+| Weather type              | Appearance                                              | Dimension | Natural profile (weight) |
+| ------------------------- | ------------------------------------------------------- | --------- | ------------------------ |
+| `localizedrain:snow`      | Snowfall (snowflake particles)                           | Skylit    | `snow` (14)              |
+| `localizedrain:blizzard`  | Blizzard: dense snowflakes + cold fog + freezing damage + slower movement | Skylit | `blizzard` (8, 3 stages) |
+| `localizedrain:sandstorm` | Sandstorm: white-ash particles + dust fog + damage + slower movement | Skylit | `sandstorm` (8, 2 stages) |
+| `localizedrain:fog`       | Thick fog: low-density cloud particles + grey fog        | Skylit    | `fog` (12)               |
+| `localizedrain:overcast`  | Overcast: cloud particles + dark grey fog (no precipitation) | Skylit | `overcast` (18)         |
+| `localizedrain:ashstorm`  | Ash storm: ash particles + dark grey fog + damage + slower movement | Nether | `ashstorm` (6, 2 stages) |
+| `localizedrain:soulmist`  | Soul mist: soul particles + teal fog + slower movement   | Nether    | `soulmist` (6)           |
+| `localizedrain:voidstorm` | Void storm: portal particles + purple-black fog + magic damage + thunder | End | `voidstorm` (4, 2 stages) |
+| `localizedrain:voidhaze`  | Void haze: portal particles + dark fog + slower movement | End       | `voidhaze` (5)           |
+
+<br />
+
+- These preset weathers **do not participate in natural generation by default**. To enable their natural spawning, set `enableBuiltinPresets` to `true` in `weather.toml` (or the global default file `global-weather.toml`).
+- Every preset weather has a storm profile with the same name. Once natural generation is enabled, mobile-mode natural storms draw from these profiles, while patch-mode weather types join biome weather cycling directly.
+- How presets relate to datapacks (overriding, removing from the natural pool) is covered in "Custom datapacks → Presets and datapacks".
+
+## Custom datapacks
+
+Weather types (`localizedrain:weather_type`) and storm profiles (`localizedrain:storm_profile`) are both datapack registries: the jar's built-in content, add-on mods and external datapacks share the same registries, and definitions with the same id override each other. This section collects everything related to datapacks.
+
+### Where datapacks go and how they are enabled
+
+Besides the mod's own `data/`, datapacks can also be dropped straight into the config directory, or installed as a normal datapack:
+
+```text
+config/localizedrain/datapacks/<name>/pack.mcmeta
+config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/storm_profile/<id>.json
+config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_type/<id>.json
+```
+
+- Every sub-directory is one datapack and **must contain `pack.mcmeta`**; a missing or broken file is ignored with a warning. The display name is read from `pack.mcmeta`'s `description`.
+
+- Folder names may only contain `a-z`, `0-9`, `_`, `.` and `-`; other names are ignored with a warning.
+
+- On startup the folder is scanned and every pack is registered in `config/localizedrain/datapacks.toml` (new packs default to enabled). Packs can be switched off one by one by folder name:
+
+  ```toml
+  enabled = true          # false ignores the whole datapacks folder
+
+  [packs]
+  # <display name from pack.mcmeta>
+  "my-pack" = true
+  ```
+
+- These packs are registered as **server data** packs only (`SERVER_DATA`): particles, sounds and language files must come from a resource pack; a custom type's `display_key` shows the raw key when it is not translated.
+
+- The pack repository is assembled at startup, so adding, removing or renaming a folder, or changing a switch, needs a game restart; `/reload` only re-reads packs that are already selected.
+
+- These packs are always enabled and sit above the built-in content, so a profile/type with the same id overrides the built-in definition; the built-in `clear` capability bits are forced back to clear with a single warning.
+
+### Weather types
+
+Weather types are the datapack registry `localizedrain:weather_type`, with built-in `clear` / `rain` / `thunder`
 (`data/localizedrain/localizedrain/weather_type/*.json`). Any datapack can add a type under
 `data/<namespace>/localizedrain/weather_type/<id>.json`:
 
@@ -93,11 +149,18 @@ Weather types are a **datapack registry** `localizedrain:weather_type`, with bui
 {
   "display": "Sandstorm",
   "display_key": "weather.mypack.sandstorm",
-  "has_precipitation": true,
-  "precipitation": "rain",
+  "has_precipitation": false,
+  "precipitation": "none",
   "allows_thunder": false,
-  "particle": "weatherplus:sandstorm",
-  "sound": "weatherplus:weather.sandstorm",
+  "particle": "minecraft:white_ash",
+  "sound": "minecraft:block.sand.break",
+  "particle_count": 140,
+  "sound_interval_ticks": 45,
+  "visuals": { "fog_color": "#8a7050", "fog_near": 8, "fog_far": 64 },
+  "effects": {
+    "damage": { "amount": 0.5, "interval_ticks": 60, "only_when_exposed": true, "type": "minecraft:generic" },
+    "movement_speed": 0.9
+  },
   "extra": { "color": "#d8c080" }
 }
 ```
@@ -105,12 +168,84 @@ Weather types are a **datapack registry** `localizedrain:weather_type`, with bui
 - `display` / `display_key`: literal name or translation key (`display` wins; if neither is present the key is
   derived as `weather.<namespace>.<path>`).
 - `has_precipitation` / `precipitation` (`none` / `rain` / `snow`) / `allows_thunder`: capability flags.
-- `particle` / `sound` / `extra`: **render hints for creators**. This mod does not hardcode particles or special
-  effects for custom types; it only exposes these fields so packs/mods can render them themselves.
+- `particle` / `sound` / `particle_count` (default 80) / `sound_interval_ticks` (default 40, 0 = off):
+  the built-in client visuals consume them — `particle` must be a **simple particle** (`SimpleParticleType`) and is
+  spawned around the player by intensity; `sound` is played as an ambience loop. You can also render everything
+  yourself from `extra` if you want a fully custom look.
+- `visuals`: `fog_color` (`#rrggbb` or `0xrrggbb`) / `fog_near` / `fog_far`, interpolated by intensity on the client.
+  `sky_darken` is reserved but **not consumed yet**.
+- `effects`: `damage` (`amount` / `interval_ticks` / `only_when_exposed` / `type` damage type id, default
+  `minecraft:generic`; intervals below 10 are raised to 10 because vanilla has a 10-tick hurt cooldown) and
+  `movement_speed` (speed multiplier).
+  In patch mode it applies to players inside the weather patch; in mobile mode it applies to players **covered by the
+  dominant storm**; leaving the area restores speed and resets the damage timer, and switching modes never leaves stacked modifiers.
+- `requires_skylight` (default `false`): when `true` the type only appears in **skylit** dimensions (natural pools and
+  forced weather skip it); in no-skylight dimensions it can still be set explicitly with `/weather type`.
+- `extra`: free-form JSON kept as-is.
 
-Custom types can be used directly in storm stages, whitelist/blacklist, forced weather, `/weather type` and
-`WeatherApi`. To let a type join **natural cycling**, add it to the natural-pool tag
-`data/<namespace>/tags/localizedrain/weather_type/natural.json` (used when present) or to a biome whitelist.
+Custom types can be used directly in storm stages, whitelist/blacklist, forced weather, `/weather type` and `WeatherApi`.
+To let a type join **natural cycling**, add it to the natural-pool tag `data/<namespace>/tags/localizedrain/weather_type/natural.json`
+(used when present) or to the whitelist of the corresponding biome.
+
+### Storm profiles
+
+Storm profiles live in `data/<datapack namespace>/localizedrain/storm_profile/<id>.json`: NeoForge prefixes the
+directory with the registry namespace too, so the path contains `localizedrain` twice; the file's namespace becomes
+the namespace of the profile id.
+
+- These parameters describe spawn weight, whether the profile spawns naturally, movement speed multiplier, radius,
+  vertical mode (`SURFACE` / `BAND` / `COLUMN`), as well as stage types, rain/thunder intensity, stage durations and
+  environmental evolution parameters.
+- A storm profile may add `"biomes": []` to restrict where it spawns. Entries accept biome tags (`#minecraft:is_taiga`),
+  a single biome (`minecraft:desert`) or a whole namespace (`minecraft:*`). When omitted the default filter applies:
+  a `SURFACE` profile with rain only spawns in biomes that have precipitation; an explicit list overrides that
+  (e.g. a sandstorm can list deserts). Cave/column profiles are not subject to the default precipitation rule.
+- Storm profiles can also carry tags: `data/<namespace>/tags/localizedrain/storm_profile/<tag>.json`. The mod ships
+  `#localizedrain:natural` as the natural spawn pool: when the tag exists (and is non-empty) its members are used,
+  otherwise the per-profile `"natural": true` flag is used. APIs: `StormProfiles.idsInTag(level, tag)` and
+  `StormProfiles.tagIds(level, profileId)`.
+
+### Dimensions and sky light
+
+**Dimension compatibility**: the `dimensions` field of a storm profile accepts dimension ids, dimension type ids,
+`namespace:*` and `#dimension_type_tag` (e.g. `"dimensions": ["#minecraft:is_overworld", "mypack:aether"]`); an empty
+list means any dimension.
+So **any registry dimension (including datapack dimensions) works as long as its dimension type has skylight and the
+profile/biome rules allow it; the mod no longer hardcodes the overworld**.
+Misspelled `biomes` / `dimensions` selectors are dropped with a warning; if **the whole list is invalid the profile keeps
+its "restricted" flag, so it never spawns in any biome/dimension (instead of silently becoming unrestricted because the
+list became empty)**.
+
+Profiles can also set `skylight`: `any` (default) / `required` (skylit dimensions only) / `forbidden`
+(no-skylight dimensions only). Built-in blizzard, sandstorm, fog and overcast are `required`; ashstorm,
+soulmist, voidstorm and voidhaze are `forbidden`. Ashstorm and soulmist additionally use
+`"dimensions": ["minecraft:the_nether"]` to stay in the Nether, while voidstorm and voidhaze use
+`"dimensions": ["minecraft:the_end"]` to stay in the End.
+
+No-skylight / ceiling dimensions (the Nether, custom cave dimensions): patch-mode weather keeps ticking
+(precipitation no longer requires seeing the sky); mobile mode does not spawn `SURFACE` storms but does allow
+**BAND storms** — a vertical band around the player's height, subject to `skylight` / `requires_skylight`.
+
+### Presets and datapacks
+
+Custom datapacks can override same-id types/profiles from the presets, and can remove presets from the
+`#localizedrain:natural` tag so they no longer participate in natural generation.
+
+### What data cannot express
+
+The config GUI (driven by code-side `ModConfigSpec`/managed TOML; datapack content does not appear there — use
+`/reload` after editing), arbitrary gameplay logic outside the schema, complex particle behaviour, sky boxes/shaders
+and other custom rendering — those still need an add-on mod or client code.
+
+## Weather types and extension API
+
+After `/reload` the mod re-parses weather types and storm profiles, then refreshes the capability bits of existing patch
+states and storms (type IDs, timers, manual flags and spatial ownership are unchanged); invalid or deleted types have
+their capability bits cleared and log a single warning, and a manually set type that was deleted returns to clear
+weather immediately.
+
+The JSON definitions, tags, dimension and sky-light rules of weather types and storm profiles are described in
+"Custom datapacks".
 
 Queries and read APIs:
 
@@ -119,7 +254,8 @@ Queries and read APIs:
 - `api.WeatherTypes`: `resolve(level, id)` / `ids(level)` / `naturalIds(level)` / `tagIds(level, tag)`; these work on
   the client too (datapack registries are synced on login).
 - `api.WeatherType`: `displayName()` / `particle()` / `sound()` / `extra()`.
-- Client state: `network.ClientWeatherTargets.typeKey()` and `client.ClientStormCache.storms()`.
+- Client state: `network.ClientWeatherTargets.typeKey()` (HUD target type) and
+  `client.ClientStormCache.storms()` (current storm snapshots, with type, position, radius and intensity).
 - Storm events: `StormSpawnEvent` (cancellable), `StormStageChangeEvent`, `StormRemoveEvent`;
   spawning entry points are `StormManager` / `StormSpawnSpec`.
 
@@ -128,7 +264,7 @@ Queries and read APIs:
 1. Install NeoForge for Minecraft 1.21.1 (21.1.265 or newer).
 2. Install this mod on both the server and the client.
 
-> Client and server must run the same version (network protocol `"7"`). If they differ, the connection is not dropped,
+> Client and server must run the same version (network protocol `"8"`). If they differ, the connection is not dropped,
 > but you will be notified on login, the server log records a warning, and storm/weather sync silently does nothing.
 
 ## Quick start
@@ -151,37 +287,25 @@ Queries and read APIs:
 
 Config files are split into global and per-save layers:
 
-| File | Location | Editable in main menu | Content |
-| --- | --- | --- | --- |
-| `common.toml` | `config/localizedrain/` (global) | yes | debug switches, shared by every save |
-| `global-weather.toml` | `config/localizedrain/` (global) | yes | weather defaults for **new saves** (weather mode, simulation timings, moving-storm settings) |
-| `global-filters.toml` | `config/localizedrain/` (global) | yes | weather filter defaults for **new saves** (biome=weather) |
-| `weather.toml` | `<save>/serverconfig/localizedrain/` | no (edit in game) | weather settings of the current save; copied from `global-weather.toml` when the save is created |
-| `filters.toml` | `<save>/serverconfig/localizedrain/` | no (edit in game) | weather filters of the current save; copied from `global-filters.toml` when the save is created |
+| File                    | Location                             | Editable in main menu     | Content                                                                                                    |
+| ----------------------- | ------------------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `common.toml`           | `config/localizedrain/` (global)     | yes                       | debug switches (`debugLogging` / `logWeatherChanges` / `logStormSpawns` / `logStormSpawnsToChat`), shared by every save |
+| `datapacks.toml`        | `config/localizedrain/` (global)     | no (edit the file)        | master switch and per-pack switches for config datapacks (see "Custom datapacks"); new packs are registered on startup |
+| `global-weather.toml`   | `config/localizedrain/` (global)     | yes                       | weather defaults for **new saves** (weather mode, simulation timings, moving-storm settings)                |
+| `global-filters.toml`   | `config/localizedrain/` (global)     | yes                       | weather filter defaults for **new saves** (biome=weather)                                                   |
+| `weather.toml`          | `<save>/serverconfig/localizedrain/` | no (edit in game)         | weather settings of the current save; copied from `global-weather.toml` when the save is created            |
+| `filters.toml`          | `<save>/serverconfig/localizedrain/` | no (edit in game)         | weather filters of the current save; copied from `global-filters.toml` when the save is created             |
 
 The global files can be edited from the main menu (Mods → Localized Rain → Config); they define the starting values for **new worlds** and never touch existing saves. When a save is created, the mod copies `global-weather.toml` / `global-filters.toml` to `<save>/serverconfig/localizedrain/weather.toml` / `filters.toml`; edit the per-save copies in game (Server options) to change an existing world. The legacy `config/localizedrain-common.toml` is split automatically on launch: weather/storm keys go to `global-weather.toml`, the three filter lists go to `global-filters.toml`, and debug keys go to `common.toml` (existing targets are skipped; the old file is kept as a backup). In existing saves a `weatherMode` that is still the default `PATCHES` is migrated once from the legacy file (a `.weatherMode-migrated` marker is written to the save directory, so setting it back to `PATCHES` later is respected); a mode you picked in a given save is never overwritten.
 
-### Datapacks in the config folder
-
-Besides the built-in `data/`, datapacks can be dropped straight into the config directory:
-
-```text
-config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/storm_profile/<id>.json
-config/localizedrain/datapacks/<name>/data/<namespace>/localizedrain/weather_type/<id>.json
-```
-
-- Every sub-directory is one datapack; `pack.mcmeta` is optional. Folder names may only contain `a-z`, `0-9`, `_`, `.` and `-`; other names are ignored with a warning.
-- `loadConfigDatapacks` in `datapacks.toml` (default `true`) controls whether the whole folder is loaded; with `false` these packs are not added to the pack repository.
-- The pack repository is assembled at startup, so adding, removing or renaming a folder needs a game restart; `/reload` only re-reads packs that are already selected.
-- These packs are always enabled and sit above the built-in content, so a profile/type with the same id overrides the built-in definition.
-
-Main options (with defaults):
+Main options (with defaults).
 
 ### General and patch mode
 
 | Key                              | Default   | Description                                              |
 | -------------------------------- | --------- | -------------------------------------------------------- |
 | `weatherMode`                    | `mobile`  | `patches` / `mobile` / `vanilla`; new worlds default to `mobile`; hot-switchable at runtime (about a second, or use `/weather mode`) |
+| `enableBuiltinPresets`           | `false`   | Whether the 9 extra built-in weather presets take part in natural weather/natural storms; when off they can still be set manually or referenced by datapacks |
 | `weatherSimulationIntervalTicks` | `20`      | Advance interval for loaded biome patches; larger is cheaper |
 | `scan3dSubstates`                | `true`    | Whether to scan 3D substates such as caves and floating islands |
 | `stateRetentionDays`             | `7`       | Days to keep patch states; `0` disables time-based cleanup |
@@ -189,9 +313,9 @@ Main options (with defaults):
 | `maxParentEntries`               | `16384`   | Hard cap for the union-find parent table                  |
 | `maxColumnScansPerTick`          | `4`       | Maximum number of newly scanned columns per tick          |
 | `debugLogging`                   | `false`   | Emit patch scan / merge debug logging                      |
-| `logWeatherChanges`              | `false`   | Log biome patch weather changes with position and type    |
+| `logWeatherChanges`              | `false`   | Log biome patch weather changes with position and type     |
 | `logStormSpawns`                 | `false`   | Log detailed storm spawn parameters (debug, off by default) |
-| `logStormSpawnsToChat`           | `false`   | Report storm spawns in chat (debug, off by default)       |
+| `logStormSpawnsToChat`           | `false`   | Report storm spawns in chat (debug, off by default)        |
 
 ### Weather pacing (ticks)
 
@@ -241,8 +365,8 @@ Main options (with defaults):
 
 - Client rain/snow particles render according to the overall rain level of the player's patch/storm and are not localized per block; near the edge of a rainy area you may still see rain in a neighbouring clear area.
 - Biome patches are quantized to 16 blocks horizontally and 4 blocks vertically; unloaded areas are frozen and treated as clear when queried.
-- Natural storms only spawn in dimensions with sky light and no ceiling; `SURFACE` manual storms are rejected in dimensions without sky light, but `BAND` / `COLUMN` cave storms can still be created manually.
-- Underground `BAND` / `COLUMN` storms only rain, never strike lightning (lightning requires an opening directly above the strike point, `canSeeSky`); non-`SURFACE` thunderstorms in dimensions without sky light or with a ceiling are rejected outright.
+- Natural storms: skylit dimensions spawn `SURFACE` storms; no-skylight / ceiling dimensions only spawn `BAND` storms, with eligible profiles decided by `skylight` and the stage type's `requires_skylight`.
+- `BAND` / `COLUMN` storms can strike lightning in no-skylight dimensions; skylit dimensions still require an opening directly above the strike point (`canSeeSky`).
 - Stopping the server or switching saves clears the storm static caches; reloading the config resets one-shot warnings.
 - In mobile mode, `weatherBiomeOverrides` forced to a concrete weather (rain/thunder/custom type) does not create precipitation by itself: the rule only filters natural storm spawn points. Spawn a storm manually for precipitation, or use patch mode.
 

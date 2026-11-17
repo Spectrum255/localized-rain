@@ -1,0 +1,10 @@
+{
+  "replace": false,
+  "values": [
+    "localizedrain:clear",
+    "localizedrain:rain",
+    "localizedrain:thunder",
+    "localizedrain:snow",
+    "localizedrain:blizzard"
+  ]
+}
