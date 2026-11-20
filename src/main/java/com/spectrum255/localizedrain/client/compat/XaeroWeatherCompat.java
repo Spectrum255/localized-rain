@@ -1,10 +1,15 @@
 package com.spectrum255.localizedrain.client.compat;
 
 import com.spectrum255.localizedrain.Localizedrain;
+import com.spectrum255.localizedrain.client.ClientWeatherLayers;
 import com.spectrum255.localizedrain.network.ClientWeatherTargets;
+import com.spectrum255.localizedrain.network.WeatherStatePayload;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import net.minecraft.network.chat.Component;
 
@@ -31,8 +36,12 @@ public final class XaeroWeatherCompat {
 
     /** 已确认不可用（Xaero 版本不匹配等），不再重试。 */
     private static boolean disabled;
+    /** 代理内部异常只告警一次，避免每帧刷日志。 */
+    private static boolean warnedProxyFailure;
     /** 当前已安装的显示实例；Xaero 重建内置行时靠它识别并重新替换。 */
     private static Object installedDisplay;
+    /** 反射方法缓存：key = 类名#方法名:参数类型名。 */
+    private static final Map<String, Method> METHOD_CACHE = new ConcurrentHashMap<>();
 
     private XaeroWeatherCompat() {}
 
@@ -49,6 +58,17 @@ public final class XaeroWeatherCompat {
                     "[localizedrain] Xaero weather display integration disabled: {}", throwable.toString());
             return false;
         }
+    }
+
+    /** 代理运行期失败（Xaero 内部结构变化等）不能影响渲染线程，只告警一次并隐藏该行。 */
+    private static void warnProxyFailure(Throwable failure) {
+        if (warnedProxyFailure) {
+            return;
+        }
+        warnedProxyFailure = true;
+        Localizedrain.LOGGER.warn(
+                "[localizedrain] Xaero weather HUD proxy failed; hiding the weather line: {}",
+                failure.toString());
     }
 
     private static boolean install0() throws Exception {
@@ -126,25 +146,49 @@ public final class XaeroWeatherCompat {
                     default -> null;
                 };
             }
-            if (args != null && args.length >= 2) {
-                Object display = args[0];
-                Object compiler = args[1];
-                Object state = findMethod(infoDisplayClass, "getEffectiveState").invoke(display);
-                if (Boolean.TRUE.equals(state)) {
-                    Component line = null;
-                    String typeKey = ClientWeatherTargets.typeKey();
-                    if (!typeKey.isEmpty()) {
-                        // 自定义天气类型（例如附属模组的沙尘暴）自带显示键
-                        line = Component.translatable(typeKey);
-                    } else if (ClientWeatherTargets.isThundering()) {
-                        line = Component.translatable("gui.xaero_weather_thundering");
-                    } else if (ClientWeatherTargets.isRaining()) {
-                        line = Component.translatable("gui.xaero_weather_raining");
-                    }
-                    if (line != null) {
-                        findMethod(compiler.getClass(), "addLine", line.getClass()).invoke(compiler, line);
+            try {
+                if (args != null && args.length >= 2) {
+                    Object display = args[0];
+                    Object compiler = args[1];
+                    Object state = findMethod(infoDisplayClass, "getEffectiveState").invoke(display);
+                    if (Boolean.TRUE.equals(state)) {
+                        List<WeatherStatePayload.Layer> layers = ClientWeatherLayers.layers();
+                        Component line = null;
+                        for (WeatherStatePayload.Layer layer : layers) {
+                            if (layer.typeKey().isEmpty()) {
+                                continue;   // 内置类型（雨/雷/晴）没有自定义显示键，交给下面的聚合状态
+                            }
+                            Component name = Component.translatable(layer.typeKey());
+                            line = line == null ? name : line.copy().append(Component.literal(" / ")).append(name);
+                        }
+                        // 内置降水/雷暴：用服务端 payload 的聚合布尔表示（叠加时雨层可能没有自定义键）
+                        Component weather = null;
+                        if (ClientWeatherTargets.isThundering()) {
+                            weather = Component.translatable("gui.xaero_weather_thundering");
+                        } else if (ClientWeatherTargets.isRaining()) {
+                            weather = Component.translatable("gui.xaero_weather_raining");
+                        }
+                        if (weather != null) {
+                            line = line == null
+                                    ? weather
+                                    : line.copy().append(Component.literal(" / ")).append(weather);
+                        }
+                        if (line == null) {
+                            // 片模式下 payload 不带层列表，只剩 targets 里的自定义类型键
+                            String typeKey = ClientWeatherTargets.typeKey();
+                            if (!typeKey.isEmpty()) {
+                                line = Component.translatable(typeKey);
+                            }
+                        }
+                        if (line != null) {
+                            // 小地图信息行按单行渲染；多种天气用 " / " 连接（Xaero 只稳定显示第一行）
+                            findMethod(compiler.getClass(), "addLine", line.getClass()).invoke(compiler, line);
+                        }
                     }
                 }
+            } catch (Throwable failure) {
+                // 渲染线程上的反射失败不能抛出去：Xaero 每帧都会调用代理，抛出会反复刷屏甚至崩游戏
+                warnProxyFailure(failure);
             }
             return null;
         };
@@ -163,8 +207,12 @@ public final class XaeroWeatherCompat {
                     default -> null;
                 };
             }
-            if ("accept".equals(method.getName()) && args != null && args.length == 1) {
-                findMethod(managerClass, "add", args[0].getClass()).invoke(manager, args[0]);
+            try {
+                if ("accept".equals(method.getName()) && args != null && args.length == 1) {
+                    findMethod(managerClass, "add", args[0].getClass()).invoke(manager, args[0]);
+                }
+            } catch (Throwable failure) {
+                warnProxyFailure(failure);
             }
             return null;
         };
@@ -191,6 +239,31 @@ public final class XaeroWeatherCompat {
     /** 按名字和参数类型找 public 方法，类型用 isAssignableFrom 匹配，避免依赖具体实现类。 */
     private static Method findMethod(Class<?> owner, String name, Class<?>... parameterTypes)
             throws NoSuchMethodException {
+        String key = cacheKey(owner, name, parameterTypes);
+        Method cached = METHOD_CACHE.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        Method found = lookupMethod(owner, name, parameterTypes);
+        METHOD_CACHE.putIfAbsent(key, found);
+        return found;
+    }
+
+    private static Method findMethod(Class<?> owner, String name) throws NoSuchMethodException {
+        return findMethod(owner, name, new Class<?>[0]);
+    }
+
+    /** HUD 每帧都会编译显示行；缓存后不再每次 getMethods() 复制整张方法表。 */
+    private static String cacheKey(Class<?> owner, String name, Class<?>[] parameterTypes) {
+        StringBuilder key = new StringBuilder(owner.getName()).append('#').append(name);
+        for (Class<?> type : parameterTypes) {
+            key.append(':').append(type.getName());
+        }
+        return key.toString();
+    }
+
+    private static Method lookupMethod(Class<?> owner, String name, Class<?>... parameterTypes)
+            throws NoSuchMethodException {
         for (Method method : owner.getMethods()) {
             if (!method.getName().equals(name) || method.getParameterCount() != parameterTypes.length) {
                 continue;
@@ -204,15 +277,6 @@ public final class XaeroWeatherCompat {
                 }
             }
             if (matches) {
-                return method;
-            }
-        }
-        throw new NoSuchMethodException(owner.getName() + "#" + name);
-    }
-
-    private static Method findMethod(Class<?> owner, String name) throws NoSuchMethodException {
-        for (Method method : owner.getMethods()) {
-            if (method.getName().equals(name) && method.getParameterCount() == 0) {
                 return method;
             }
         }

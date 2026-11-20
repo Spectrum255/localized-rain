@@ -27,11 +27,20 @@ public final class ClientWeatherHooks {
         ResourceKey<Level> dimension = minecraft.level != null ? minecraft.level.dimension() : null;
         if (lastDimension != null && !lastDimension.equals(dimension)) {
             ClientWeatherTargets.clear();
+            // 叠加层同样没有维度字段：不清会让新维度头几秒按旧风暴的类型/强度渲染粒子
+            ClientWeatherLayers.clear();
+            // 风暴缓存没有维度字段：不清会让新维度的头几秒继承旧维度的风暴视觉/雨量
+            ClientStormCache.clear();
+            // 渐变缓存也不带维度：否则新维度会先从旧维度的混合结果开始淡入
+            ClientWeatherVisuals.clearTransitions();
         }
         lastDimension = dimension;
 
         // 每 20 tick（约 1 秒）检查一次：Xaero 重开世界时可能重建内置信息行
         if (ticks++ % 20 != 0) {
+            return;
+        }
+        if (!ClientWeatherConfig.xaeroWeatherOverlay()) {
             return;
         }
         tryInstallXaero();
@@ -40,6 +49,11 @@ public final class ClientWeatherHooks {
     /** 登出时由客户端监听调用，避免把上一局的目标天气带到下一个世界。 */
     public static void onLoggingOut() {
         ClientWeatherTargets.clear();
+        ClientWeatherLayers.clear();
+        ClientWeatherVisuals.clearTransitions();
+        // 退出世界时清掉风暴缓存：若下一个服务器不发 StormSyncPayload（原版服/未装本模组），
+        // 旧缓存会一直生效，表现为退出后仍按上一局风暴下雨。
+        ClientStormCache.clear();
         lastDimension = null;
     }
 

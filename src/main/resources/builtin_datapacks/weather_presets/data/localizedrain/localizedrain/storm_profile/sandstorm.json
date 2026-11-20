@@ -1,0 +1,41 @@
+{
+  "weight": 8,
+  "natural": true,
+  "speed_multiplier": 1.2,
+  "radius": [170, 280],
+  "vertical": "surface",
+  "skylight": "required",
+  "biomes": [
+    "minecraft:desert",
+    "minecraft:badlands",
+    "minecraft:eroded_badlands",
+    "minecraft:wooded_badlands"
+  ],
+  "stages": [
+    {
+      "type": "localizedrain:sandstorm",
+      "min_ticks": 2400,
+      "max_ticks": 4800,
+      "rain": [0.0, 0.0],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [0.9, 1.0]
+    },
+    {
+      "type": "localizedrain:sandstorm",
+      "min_ticks": 3000,
+      "max_ticks": 6000,
+      "rain": [0.0, 0.0],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [1.0, 1.15]
+    },
+    {
+      "type": "localizedrain:sandstorm",
+      "min_ticks": 2000,
+      "max_ticks": 4000,
+      "rain": [0.0, 0.0],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [1.15, 0.9]
+    }
+  ],
+  "environment": { "stage_speed_from_moisture": false, "moisture_gain": 0.0, "moisture_decay": 0.004 }
+}

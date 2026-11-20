@@ -9,6 +9,9 @@ import net.minecraft.util.RandomSource;
 
 /** 维度级风场：所有自然风暴共享。 */
 public final class WindField {
+    /** 风场速度硬上限（方块/tick）：10 × 20 = 200 格/秒，避免 API/命令把风暴推出世界。 */
+    public static final double MAX_SPEED = 10.0D;
+
     private double velocityX;
     private double velocityZ;
     private long nextChangeTick;
@@ -26,11 +29,25 @@ public final class WindField {
     }
 
     public void set(double velocityX, double velocityZ) {
+        if (!Double.isFinite(velocityX) || !Double.isFinite(velocityZ)) {
+            return;
+        }
+        double speed = Math.hypot(velocityX, velocityZ);
+        if (speed > MAX_SPEED) {
+            double scale = MAX_SPEED / speed;
+            velocityX *= scale;
+            velocityZ *= scale;
+        }
         this.velocityX = velocityX;
         this.velocityZ = velocityZ;
     }
 
-    /** 到达间隔就做一次有界随机游走；模长始终钳制在 [windMinSpeed, windMaxSpeed]。 */
+    /**
+     * 每隔 windChangeIntervalTicks 调整一次：方向无期望值，首次随机、之后在当前角度上 ± 浮动；
+     * 速度首次取初始值，之后在当前速度上浮动；若当前速度偏离初始值超过上限，则暂停随机浮动，
+     * 按 windReturnRate 的比例逐步拉回初始值，回到范围内后重新开始浮动。
+     * 每次浮动的「幅度」在 [min, max] 配置区间内均匀取值，正负号随机。
+     */
     public void tick(ServerLevel level) {
         long now = level.getGameTime();
         if (now < this.nextChangeTick) {
@@ -39,24 +56,50 @@ public final class WindField {
         int interval = intConfig(Config.WIND_CHANGE_INTERVAL_TICKS, 1200);
         this.nextChangeTick = now + Math.max(20, interval);
         RandomSource random = level.getRandom();
-        double min = doubleConfig(Config.WIND_MIN_SPEED, 0.02D);
-        double max = Math.max(min, doubleConfig(Config.WIND_MAX_SPEED, 0.08D));
+
+        double initialSpeed = Math.max(0.0D, doubleConfig(Config.WIND_INITIAL_SPEED, 10.0D)) / 20.0D;
+        double deviationLimit = Math.max(0.0D, doubleConfig(Config.WIND_SPEED_DEVIATION_LIMIT, 5.0D)) / 20.0D;
+        double returnRate = Mth.clamp(doubleConfig(Config.WIND_RETURN_RATE, 0.25D), 0.0D, 1.0D);
+        double speedVariationMin = Math.max(0.0D, doubleConfig(Config.WIND_SPEED_VARIATION_MIN, 1.0D)) / 20.0D;
+        double speedVariationMax = Math.max(0.0D, doubleConfig(Config.WIND_SPEED_VARIATION_MAX, 3.0D)) / 20.0D;
+        double directionVariationMin = Math.toRadians(
+                Math.max(0.0D, doubleConfig(Config.WIND_DIRECTION_VARIATION_MIN, 10.0D)));
+        double directionVariationMax = Math.toRadians(
+                Math.max(0.0D, doubleConfig(Config.WIND_DIRECTION_VARIATION_MAX, 30.0D)));
+
         double currentSpeed = Math.hypot(this.velocityX, this.velocityZ);
-        if (currentSpeed < 1.0E-6D) {
-            // 初始风场（或档案里速度为 0）：先给一个随机的起始方向与速度
-            double angle = random.nextDouble() * Math.PI * 2.0;
-            double speed = min + random.nextDouble() * (max - min);
-            this.velocityX = Math.cos(angle) * speed;
-            this.velocityZ = Math.sin(angle) * speed;
-            return;
+        if (!Double.isFinite(currentSpeed)) {
+            currentSpeed = 0.0D;   // 手动 set/读档留下的坏值：当作无风，重新起风
         }
-        // 有界随机游走：方向在 ±30° 内摆动、速度小幅抖动，避免 180° 突变把风暴甩来甩去
-        double maxTurn = Math.toRadians(30.0D);
-        double angle = Math.atan2(this.velocityZ, this.velocityX)
-                + (random.nextDouble() * 2.0D - 1.0D) * maxTurn;
-        double speed = Mth.clamp(currentSpeed + (random.nextDouble() * 2.0D - 1.0D) * 0.01D, min, max);
-        this.velocityX = Math.cos(angle) * speed;
-        this.velocityZ = Math.sin(angle) * speed;
+        double angle;
+        if (currentSpeed < 1.0E-6D) {
+            // 世界（维度）第一次起风：方向随机，速度取初始值
+            angle = random.nextDouble() * Math.PI * 2.0D;
+            currentSpeed = initialSpeed;
+        } else {
+            angle = Math.atan2(this.velocityZ, this.velocityX);
+            double deviation = currentSpeed - initialSpeed;
+            if (deviationLimit > 0.0D && Math.abs(deviation) > deviationLimit) {
+                // 偏离过大：按比例向初始值回归，不再叠加随机浮动；returnRate 为 0 时至少吸附一次
+                currentSpeed = returnRate > 0.0D ? currentSpeed + deviation * returnRate : initialSpeed;
+            } else {
+                double variation = sample(random, speedVariationMin, speedVariationMax);
+                currentSpeed = Mth.clamp(
+                        currentSpeed + (random.nextBoolean() ? variation : -variation),
+                        0.0D, MAX_SPEED);
+            }
+        }
+        double directionVariation = sample(random, directionVariationMin, directionVariationMax);
+        angle += random.nextBoolean() ? directionVariation : -directionVariation;
+        this.velocityX = Math.cos(angle) * currentSpeed;
+        this.velocityZ = Math.sin(angle) * currentSpeed;
+    }
+
+    /** 在 [min, max] 内均匀采样（自动交换顺序），用于浮动幅度的随机取值。 */
+    private static double sample(RandomSource random, double min, double max) {
+        double lo = Math.min(min, max);
+        double hi = Math.max(min, max);
+        return lo + random.nextDouble() * (hi - lo);
     }
 
     public CompoundTag save() {
@@ -69,8 +112,15 @@ public final class WindField {
 
     public static WindField load(CompoundTag tag, long gameTime) {
         WindField wind = new WindField();
-        wind.velocityX = tag.getDouble("vx");
-        wind.velocityZ = tag.getDouble("vz");
+        double velocityX = tag.getDouble("vx");
+        double velocityZ = tag.getDouble("vz");
+        double speed = Math.hypot(velocityX, velocityZ);
+        if (!Double.isFinite(velocityX) || !Double.isFinite(velocityZ) || speed > MAX_SPEED * 1.001D) {
+            // 存档被手改/旧版本写坏：归零并立刻重抽，否则 NaN 会一路污染 atan2 与所有自然风暴坐标
+            wind.nextChangeTick = gameTime;
+            return wind;
+        }
+        wind.set(velocityX, velocityZ);
         wind.nextChangeTick = tag.contains("next") ? tag.getLong("next") : gameTime;
         return wind;
     }

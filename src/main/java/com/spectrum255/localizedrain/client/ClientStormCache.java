@@ -100,6 +100,10 @@ public final class ClientStormCache {
                 storm.radius = existing.radius + (entry.radius() - existing.radius) * 0.5D;
                 storm.rain = existing.rain + (entry.rain() - existing.rain) * 0.5F;
                 storm.thunder = existing.thunder + (entry.thunder() - existing.thunder) * 0.5F;
+                // anchor 跟随最新权威位置（构造函数里已写 entry.x/z，这里再显式写一次，
+                // 避免以后把构造逻辑改成分支时又退化成「永远吸附到出生点」）
+                storm.anchorX = entry.x();
+                storm.anchorZ = entry.z();
             }
             next.put(storm.id, storm);
         }

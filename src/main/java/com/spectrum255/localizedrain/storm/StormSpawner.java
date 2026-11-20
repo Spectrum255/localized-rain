@@ -49,7 +49,11 @@ final class StormSpawner {
         }
 
         int maxStorms = WindField.intConfig(Config.MAX_STORMS_PER_DIMENSION, 8);
-        long naturalStorms = StormManager.all(level).stream().filter(storm -> !storm.manual()).count();
+        long naturalStorms = StormManager.all(level).stream()
+                .filter(storm -> !storm.manual())
+                // 类型被数据包移除的风暴不在客户端显示，也不该继续占用生成名额
+                .filter(storm -> StormManager.hasRegisteredType(level, storm))
+                .count();
         if (naturalStorms >= maxStorms) {
             debugSpawn("natural storm cap reached");
             return;                                     // 上限只约束自然风暴，手动风暴不占用名额
@@ -108,7 +112,10 @@ final class StormSpawner {
             int configuredMin = WindField.intConfig(Config.STORM_SPAWN_MIN_DISTANCE, 300);
             int configuredMax = Math.max(configuredMin, WindField.intConfig(Config.STORM_SPAWN_MAX_DISTANCE, 700));
             // 只在已加载半径内选点：300–700 格通常超过模拟距离（12 区块 = 192 格），probe 未加载会被静默丢弃。
-            double loadedRadius = level.getServer().getPlayerList().getSimulationDistance() * 16.0D - 32.0D;
+            // 加载范围同时受模拟距离与视距限制：玩家把视距调到 2 区块时，模拟距离仍是 12，但客户端只加载 32 格。
+            int simulation = level.getServer().getPlayerList().getSimulationDistance();
+            int view = level.getServer().getPlayerList().getViewDistance();
+            double loadedRadius = Math.min(simulation, view) * 16.0D - 32.0D;
             if (loadedRadius < 48.0D) {
                 debugSpawn("simulation distance is too small for a spawn probe");
                 return;
@@ -329,6 +336,7 @@ final class StormSpawner {
     private static long ownedBy(ServerLevel level, ServerPlayer player) {
         return StormManager.all(level).stream()
                 .filter(storm -> !storm.manual())
+                .filter(storm -> StormManager.hasRegisteredType(level, storm))
                 .filter(storm -> {
                     double range = Math.min(
                             WindField.intConfig(Config.STORM_SPAWN_MAX_DISTANCE, 700) * 1.5D,

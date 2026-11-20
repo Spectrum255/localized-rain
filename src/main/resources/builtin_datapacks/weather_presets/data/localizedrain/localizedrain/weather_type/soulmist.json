@@ -1,0 +1,25 @@
+{
+  "display_key": "weather.localizedrain.soulmist",
+  "has_precipitation": false,
+  "precipitation": "none",
+  "allows_thunder": false,
+  "skylight": "forbidden",
+  "particle": "minecraft:soul",
+  "sound": "minecraft:block.soul_sand.step",
+  "particle_count": 70,
+  "sound_interval_ticks": 80,
+  "visuals": {
+    "fog_color": "#2f6f6a",
+    "fog_near": 12,
+    "fog_far": 80,
+    "particle_motion": [0.0, 0.03, 0.0],
+    "sky_darken": 0.3,
+    "sky_color": "#2f6f6a",
+    "cloud_color": "#3f7d78",
+    "sunrise_color": "#3f6f6a",
+    "star_brightness": 0.3,
+    "sun_visible": false,
+    "moon_visible": false
+  },
+  "effects": { "movement_speed": 0.95 }
+}

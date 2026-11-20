@@ -75,6 +75,20 @@ public final class WeatherManager {
     /** 存档清理间隔：1200 tick（1 分钟）。 */
     private static final int PRUNE_INTERVAL_TICKS = 1200;
 
+    /**
+     * 兼容代理的维度级缓存：每维度一份 {@link LocalQuery}。
+     *
+     * <p>只在真正被 {@code CompatWeatherQueries} 查询时按 tick 懒计算——没有任何查询就不扫描片/风暴，
+     * 开关关闭时不会产生额外开销（见 SERVER 配置 {@code compatVanillaWeatherQueries}）。</p>
+     */
+    private static final Map<ServerLevel, LocalQuery> LOCAL_QUERY = new WeakHashMap<>();
+
+    private static final class LocalQuery {
+        float rain;
+        float thunder;
+        long stamp = Long.MIN_VALUE;
+    }
+
     // 扫描期间复用的临时集合：扫描在主线程串行执行，扫完即清空，避免每轮都分配新对象
     private static final Set<String> SWEEP_CYCLING = new HashSet<>();
     private static final Map<String, WeatherBiomeFilter.Forced> SWEEP_FORCED = new LinkedHashMap<>();
@@ -90,8 +104,11 @@ public final class WeatherManager {
     private WeatherManager() {}
 
     public static void tick(ServerLevel level) {
+        // 兜底清掉上一个 tick 异常路径遗留的位置帧（正常路径每个帧自己 pop）
+        CompatWeatherQueries.clear();
         // 热重载：每 20 tick 检查一次配置界面与存档 weather.toml，改完约 1 秒生效
         if (level.getGameTime() % 20L == 0L) {
+            CompatWeatherQueries.refresh();
             WeatherMode.poll();
             WeatherMode fromFile = ConfigFiles.pollWeatherMode(level);
             if (fromFile != null && fromFile != WeatherMode.current()) {
@@ -101,14 +118,38 @@ public final class WeatherManager {
             }
         }
         WeatherMode mode = WeatherMode.current();
+        if (mode != WeatherMode.VANILLA) {
+            // 原版模式下 advanceWeatherCycle 会推进 Level 的四个雨雷字段；切到 MOBILE/PATCHES 后该方法被取消，
+            // 字段会冻结在切走前的值（通常 1.0），使 getRainLevel 的基值恒为下雨、代理的 max 无法压低。
+            if (level.rainLevel != 0.0F || level.oRainLevel != 0.0F) {
+                level.oRainLevel = 0.0F;
+                level.rainLevel = 0.0F;
+            }
+            if (level.thunderLevel != 0.0F || level.oThunderLevel != 0.0F) {
+                level.oThunderLevel = 0.0F;
+                level.thunderLevel = 0.0F;
+            }
+        }
         // 模式在运行期变化（配置重载/命令/文件热重载）时立刻重推风暴快照：客户端据此停止/开始接管雨量
         if (mode != lastMode) {
             lastMode = mode;
             // 移动模式期间 send() 不运行，LAST_SENT 停在进入移动模式前的旧值；不清掉的话，
             // 切回 patches 后目标值只要与旧缓存相同就不会发包，客户端会一直保留风暴雨量。
             LAST_SENT.clear();
+            StormManager.resetHudCache();   // 切回移动模式时旧 HUD 去重缓存会让客户端停在片天气上
             StormManager.refreshAll(level.getServer());
             Localizedrain.LOGGER.info("[localizedrain] weather mode is now {}", mode.getSerializedName());
+            if (mode == WeatherMode.VANILLA) {
+                // 切到原版模式后本模组不再发包，主动清掉客户端残留的自定义天气（否则视觉层会停在旧类型）。
+                // 必须遍历所有维度：lastMode 是全局单值，只有第一个执行 tick 的维度会进入这个分支，
+                // 其它维度若不清理，玩家跨维度后会保留旧类型/强度/粒子/雾。
+                for (ServerLevel dimension : level.getServer().getAllLevels()) {
+                    for (ServerPlayer player : dimension.players()) {
+                        LAST_SENT.remove(player.getUUID());
+                        send(player, WeatherData.WeatherState.clearDefault());
+                    }
+                }
+            }
         }
         switch (mode) {
             case PATCHES -> tickPatches(level);
@@ -122,6 +163,150 @@ public final class WeatherManager {
         }
     }
 
+    /**
+     * 兼容代理的维度级近似：该维度所有片/风暴里的最大雨量、最大雷量。
+     *
+     * <p>第三方调用的 {@code Level#isRaining()/getRainLevel()} 没有坐标参数，只能看到这个值；
+     * 位置精确的查询由 {@code CompatWeatherQueries} 的位置栈处理。计算按 tick 懒执行，
+     * 没人查询就不扫描。</p>
+     */
+    private static LocalQuery localQuery(ServerLevel level) {
+        LocalQuery query = LOCAL_QUERY.get(level);
+        if (query == null) {
+            query = new LocalQuery();
+            LOCAL_QUERY.put(level, query);
+        }
+        long now = level.getGameTime();
+        if (query.stamp == now) {
+            return query;
+        }
+        query.stamp = now;
+        float rain = 0.0F;
+        float thunder = 0.0F;
+        switch (WeatherMode.current()) {
+            case PATCHES -> {
+                WeatherData data = data(level);
+                for (String patch : data.patches()) {
+                    WeatherData.WeatherState state = data.get(patch);
+                    if (state == null || !state.isRaining()) {
+                        continue;
+                    }
+                    rain = Math.max(rain, state.rainLevel());
+                    thunder = Math.max(thunder, state.thunderLevel());
+                }
+            }
+            case MOBILE -> {
+                rain = StormManager.maxRainLevel(level);
+                thunder = StormManager.maxThunderLevel(level);
+            }
+            case VANILLA -> {
+                // 原版模式不代理：CompatWeatherQueries 也会直接放行
+            }
+        }
+        query.rain = Float.isFinite(rain) ? Mth.clamp(rain, 0.0F, 1.0F) : 0.0F;
+        query.thunder = Float.isFinite(thunder) ? Mth.clamp(thunder, 0.0F, 1.0F) : 0.0F;
+        return query;
+    }
+
+    /**
+     * 公开查询可能被第三方模组从工作线程调用（异步区块生成、并行任务等）。
+     * 本类的缓存大量使用非同步 {@link java.util.WeakHashMap} 并会访问 {@code SavedData}，
+     * 跨线程读写会损坏结构，因此非主线程直接返回安全默认值。
+     */
+    private static boolean offThread(ServerLevel level) {
+        return level != null && !level.getServer().isSameThread();
+    }
+
+    /** 该维度当前最大局部雨量（0–1），供原版 {@code getRainLevel} 兼容代理读取。 */
+    public static float localRainLevel(ServerLevel level) {
+        if (offThread(level)) {
+            return 0.0F;
+        }
+        return localQuery(level).rain;
+    }
+
+    /** 该维度当前最大局部雷量（0–1），供原版 {@code getThunderLevel} 兼容代理读取。 */
+    public static float localThunderLevel(ServerLevel level) {
+        if (offThread(level)) {
+            return 0.0F;
+        }
+        return localQuery(level).thunder;
+    }
+
+    /**
+     * 该位置当前的雨量（0–1）。
+     *
+     * <p>与 {@link #isRainingAt} 不同，这里不做见天/遮挡判断，直接返回该位置所属片/风暴的雨量；
+     * 供第三方模组按位置读取降水强度（例如按雨量决定容器集水速率）。</p>
+     */
+    public static float rainLevelAt(ServerLevel level, BlockPos pos) {
+        if (level == null || pos == null || offThread(level)) {
+            return 0.0F;
+        }
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.rainLevelAt(level, pos);
+            case VANILLA -> level.getRainLevel(1.0F);
+            case PATCHES -> patchesRainLevelAt(level, pos);
+        };
+    }
+
+    /**
+     * 未来天气变化（近似预报）：接下来 {@code horizonTicks} 内可预期的状态切换，按时间升序。
+     *
+     * <p>片模式按当前类型的 {@code next} 里权重最高的已注册条目预测（不做温湿度过滤，因此只是近似）；
+     * 移动模式按风暴阶段边界与下一阶段类型预测；原版模式与无记录的位置返回空列表。</p>
+     */
+    public static List<com.spectrum255.localizedrain.api.WeatherApi.ForecastStep> forecastAt(
+            ServerLevel level, BlockPos pos, int horizonTicks) {
+        if (level == null || pos == null || offThread(level) || horizonTicks <= 0) {
+            return List.of();
+        }
+        return switch (WeatherMode.current()) {
+            case MOBILE -> StormManager.forecastAt(level, pos, horizonTicks);
+            case VANILLA -> List.of();
+            case PATCHES -> patchForecast(level, pos, horizonTicks);
+        };
+    }
+
+    private static List<com.spectrum255.localizedrain.api.WeatherApi.ForecastStep> patchForecast(
+            ServerLevel level, BlockPos pos, int horizonTicks) {
+        WeatherData.WeatherState state = stateOrNull(level, pos);
+        if (state == null) {
+            return List.of();
+        }
+        int remaining = state.rainTimeRemaining();
+        if (remaining > horizonTicks) {
+            return List.of();
+        }
+        ResourceLocation next = state.typeId();
+        float intensity = state.rainLevel();
+        WeatherType current = WeatherTypes.byId(level, state.typeId());
+        if (current != null && !current.next().isEmpty()) {
+            WeatherType.Evolution best = null;
+            for (WeatherType.Evolution evolution : current.next()) {
+                if (evolution.weight() > 0 && (best == null || evolution.weight() > best.weight())) {
+                    best = evolution;
+                }
+            }
+            if (best != null && WeatherTypes.resolve(level, best.type()) != null) {
+                next = best.type();
+                intensity = WeatherTypes.byId(level, next).hasPrecipitation() ? Math.max(0.3F, intensity) : 0.0F;
+            }
+        }
+        return List.of(new com.spectrum255.localizedrain.api.WeatherApi.ForecastStep(remaining, next, intensity));
+    }
+
+    private static float patchesRainLevelAt(ServerLevel level, BlockPos pos) {        WeatherData.WeatherState state = stateOrNull(level, pos);
+        if (state == null || !state.isRaining()) {
+            return 0.0F;
+        }
+        if (!WeatherTypes.byId(level, state.typeId()).hasPrecipitation()) {
+            return 0.0F;
+        }
+        float value = state.rainLevel();
+        return Float.isFinite(value) ? Mth.clamp(value, 0.0F, 1.0F) : 0.0F;
+    }
+
     /** 移动天气：风暴为主；isolatedBiomeWeather=patch 时隔离群系的片仍由片机器推进。 */
     private static void tickMobile(ServerLevel level) {
         String isolatedMode = Config.isolatedBiomeWeather().id();
@@ -129,6 +314,8 @@ public final class WeatherManager {
             tickIsolatedPatches(level);
         }
         StormManager.tick(level);       // 放在后面：维度级雨雷量以风暴为准
+        // 移动模式也要做存档清理：玩家查询会持续注册父表/片，不清理会让 segment_parents 随探索膨胀
+        pruneIfDue(level, data(level));
     }
 
     /** 非 null 时，只有通过该谓词的片会被分类与推进（移动模式下隔离群系的 patch 模式用）。 */
@@ -164,26 +351,32 @@ public final class WeatherManager {
 
         // 隔离片的状态由服务端逐玩家包驱动客户端雨/雷通道（patch 模式下客户端不自行覆盖）。
         // send 内部按 0.01/tick 平滑并去重，所以这里每 tick 调用不会产生额外流量。
-        for (ServerPlayer player : level.players()) {
-            String patch = BiomePatches.patchAt(level, player.blockPosition());
-            if (patch == null || !isIsolatedPatch(level, patch)) {
-                continue;
+        try {
+            for (ServerPlayer player : level.players()) {
+                String patch = BiomePatches.patchAt(level, player.blockPosition());
+                if (patch == null || !isIsolatedPatch(level, patch)) {
+                    continue;
+                }
+                WeatherData.WeatherState state = data.get(patch);
+                // 隔离片不一定有状态条目：干燥群系 / 自然池为空 / 硬锁晴天只会进入 pinnedClear 且不创建条目，
+                // 刚进入尚未被 sweep 扫到的片也一样。移动风暴通道已按 patchOwnsHud 跳过这些玩家，
+                // 这里若什么都不发，ClientWeatherTargets 会一直保留进入隔离群系之前的旧天气。
+                send(player, state != null ? state : WeatherData.WeatherState.clearDefault());
             }
-            WeatherData.WeatherState state = data.get(patch);
-            if (state != null) {
-                send(player, state);
-            }
+        } finally {
+            // 这个缓存只服务本轮查询；key 已带维度，扫完无论是否抛异常都清空
+            ISOLATED_PATCH_CACHE.clear();
         }
-        // 这个缓存只服务本轮查询，且未按维度分区，逐 tick 清空避免跨维度串味
-        ISOLATED_PATCH_CACHE.clear();
     }
 
     /** 片所属群系是否被标记为隔离；sweep 期间同一片只解析一次。 */
     private static final Map<String, Boolean> ISOLATED_PATCH_CACHE = new HashMap<>();
 
     private static boolean isIsolatedPatch(ServerLevel level, String patch) {
-        return ISOLATED_PATCH_CACHE.computeIfAbsent(patch, key -> {
-            ResourceLocation id = BiomePatches.patchBiome(level, key);
+        // key 带维度：缓存是静态的，不同维度的同名 p3 片群系可能不同
+        String key = level.dimension().location() + "|" + patch;
+        return ISOLATED_PATCH_CACHE.computeIfAbsent(key, ignored -> {
+            ResourceLocation id = BiomePatches.patchBiome(level, patch);
             if (id == null) {
                 return false;
             }
@@ -201,6 +394,24 @@ public final class WeatherManager {
 
     public static boolean mobileMode() {
         return WeatherMode.current() == WeatherMode.MOBILE;
+    }
+
+    /** 服务器停止/换存档时清空静态缓存，避免旧 ServerLevel 被强引用（dayFactorLevel 是强引用字段）。 */
+    public static void resetCaches() {
+        dayFactorLevel = null;
+        dayFactorValue = 1.0;
+        LOOKUPS.clear();
+        DATA_CACHE.clear();
+        SWEEP_COUNTERS.clear();
+        PRUNE_COUNTERS.clear();
+        LOCAL_QUERY.clear();
+        LAST_SENT.clear();
+        WEATHER_LOG_SIGNATURES.clear();
+        ISOLATED_PATCH_CACHE.clear();
+        CompatWeatherQueries.clear();
+        CompatWeatherQueries.resetWarnings();
+        CompatWeatherQueries.refresh();
+        lastMode = null;
     }
 
     private static void tickPatches(ServerLevel level) {
@@ -241,14 +452,7 @@ public final class WeatherManager {
         SWEEP_COUNTERS.put(level, age);
 
         // 定期清理存档：删除长期未被推进的片，并在超过条数上限时按 lastTick 淘汰最旧的
-        int pruneAge = PRUNE_COUNTERS.getOrDefault(level, 0) + 1;
-        if (pruneAge >= PRUNE_INTERVAL_TICKS) {
-            pruneAge = 0;
-            data.prune(level.getGameTime(), maxStoredStates(), retentionTicks(), maxParentEntries(),
-                    patch -> BiomePatches.isColumnCached(level, patch),
-                    patch -> BiomePatches.evictColumn(level, patch));
-        }
-        PRUNE_COUNTERS.put(level, pruneAge);
+        pruneIfDue(level, data);
 
         refreshDayFactor(level);
         spawnLightning(level, patchByPlayer, data);
@@ -276,6 +480,24 @@ public final class WeatherManager {
             // 配置尚未加载时按默认值推进，避免服务器启动早期抛异常
             return 20;
         }
+    }
+
+    /** 定期清理（片模式与移动模式共用）：清过期片、按条数淘汰、收缩父表。 */
+    private static void pruneIfDue(ServerLevel level, WeatherData data) {
+        int pruneAge = PRUNE_COUNTERS.getOrDefault(level, 0) + 1;
+        if (pruneAge >= PRUNE_INTERVAL_TICKS) {
+            pruneAge = 0;
+            data.prune(level.getGameTime(), maxStoredStates(), retentionTicks(), maxParentEntries(),
+                    patch -> BiomePatches.isColumnCached(level, patch),
+                    patch -> BiomePatches.evictColumn(level, patch));
+        }
+        PRUNE_COUNTERS.put(level, pruneAge);
+    }
+
+    /** 移动模式：该位置所在的片是否有由隔离片机制维持的天气现象（清空风暴效果前需跳过）。 */
+    public static boolean isPatchWeatherActiveAt(ServerLevel level, BlockPos pos) {
+        WeatherData.WeatherState state = stateOrNull(level, pos);
+        return state != null && state.isWeatherActive();
     }
 
     /** 是否同时扫描洞穴/浮岛等 3D 群系子状态。 */
@@ -458,7 +680,9 @@ public final class WeatherManager {
                 continue;
             }
             String signature = state.typeId() + "|" + state.isRaining() + "|" + state.isThundering();
-            String previous = WEATHER_LOG_SIGNATURES.put(patch, signature);
+            // key 必须带维度：不同维度的同名 p3 片会互相覆盖签名，导致日志漏报
+            String logKey = level.dimension().location() + "|" + patch;
+            String previous = WEATHER_LOG_SIGNATURES.put(logKey, signature);
             if (signature.equals(previous)) {
                 continue;
             }
@@ -488,33 +712,42 @@ public final class WeatherManager {
         if (patchFilter != null && !patchFilter.test(patch)) {
             return;                     // 移动模式：非隔离片一律不接管
         }
-        if (patch == null || cycling.contains(patch) || manual.contains(patch)
-                || forcedByPatch.containsKey(patch) || pinnedClear.contains(patch)) {
+        if (patch == null) {
+            return;
+        }
+        // 相邻两列可能在两次 classify 之间被并查集合并：用规范 key 去重，
+        // 否则同一个 WeatherState 会在一轮 sweep 里被 tick 两次（计时器双倍推进）。
+        String key = data.canonicalKey(patch);
+        if (key == null) {
+            key = patch;
+        }
+        if (cycling.contains(key) || manual.contains(key)
+                || forcedByPatch.containsKey(key) || pinnedClear.contains(key)) {
             return;
         }
         WeatherBiomeFilter.Decision decision = WeatherBiomeFilter.decision(level, patch);
         if (decision.forced() != null) {
             // 强制天气：类型可能出现在干燥群系（例如沙漠里的沙尘暴），不检查 hasPrecipitation
-            forcedByPatch.put(patch, decision.forced());
+            forcedByPatch.put(key, decision.forced());
             return;
         }
         if (decision.hardLock()) {
             // 强制晴天：真正的锁定，指令/API/自然循环都无法覆盖
-            pinnedClear.add(patch);
+            pinnedClear.add(key);
             return;
         }
         if (data.isManual(patch)) {
             // 指令/API 手动覆盖：只走手动计时器，不参与自然循环
-            manual.add(patch);
+            manual.add(key);
             return;
         }
         if (decision.locked()) {
             // 软锁定：自然池里只剩晴天（名单剔除、干燥群系默认），手动天气仍然有效
-            pinnedClear.add(patch);
+            pinnedClear.add(key);
             return;
         }
-        candidateByPatch.put(patch, decision.pool());
-        cycling.add(patch);
+        candidateByPatch.put(key, decision.pool());
+        cycling.add(key);
     }
 
     /** 取（必要时计算）该位置所在群系范围的标识。 */
@@ -558,10 +791,16 @@ public final class WeatherManager {
         Localizedrain.LOGGER.info(
                 "[localizedrain] reloaded datapack weather definitions: {} states and {} storms refreshed",
                 states, storms);
+        // 快照里可能还带着已删除类型的原始 id：立即重推一次，别等周期校正
+        StormManager.refreshAll(server);
+        com.spectrum255.localizedrain.api.StormProfiles.resetWarnings();
     }
 
     /** 原版 isRainingAt 的完整语义：局部天气 + 头顶无遮挡 + 未被方块挡住 + 该群系确实降的是雨。 */
     public static boolean isRainingAt(ServerLevel level, BlockPos pos) {
+        if (offThread(level)) {
+            return false;
+        }
         return switch (WeatherMode.current()) {
             case MOBILE -> StormManager.isRainingAt(level, pos);
             case VANILLA -> vanillaRainingAt(level, pos);
@@ -571,6 +810,9 @@ public final class WeatherManager {
 
     /** 维度内是否有任意片/风暴正在降水：仅用于把原版维度级判定（例如睡觉清天气）局部化。 */
     public static boolean hasLocalPrecipitation(ServerLevel level) {
+        if (offThread(level)) {
+            return false;
+        }
         if (mobileMode()) {
             return StormManager.anyPrecipitation(level);
         }
@@ -595,6 +837,9 @@ public final class WeatherManager {
 
     /** 降水（积雪、炼药锅、水结冰）只看局部天气，降水类型由原版按群系自行判断。 */
     public static boolean isPrecipitatingAt(ServerLevel level, BlockPos pos) {
+        if (offThread(level)) {
+            return false;
+        }
         return switch (WeatherMode.current()) {
             case MOBILE -> StormManager.isPrecipitatingAt(level, pos);
             case VANILLA -> level.isRaining();
@@ -609,6 +854,9 @@ public final class WeatherManager {
     }
 
     public static boolean isThunderingAt(ServerLevel level, BlockPos pos) {
+        if (offThread(level)) {
+            return false;
+        }
         return switch (WeatherMode.current()) {
             case MOBILE -> StormManager.isThunderingAt(level, pos);
             case VANILLA -> level.isThundering() && vanillaRainingAt(level, pos);
@@ -644,6 +892,9 @@ public final class WeatherManager {
      * 原版刷怪判定用它决定要不要额外减 10 点光照，必须按位置而不是整个维度来算。
      */
     public static boolean isThunderingRegionAt(ServerLevel level, BlockPos pos) {
+        if (offThread(level)) {
+            return false;
+        }
         return switch (WeatherMode.current()) {
             case MOBILE -> StormManager.isThunderingRegionAt(level, pos);
             case VANILLA -> level.isThundering();
@@ -668,7 +919,7 @@ public final class WeatherManager {
      * {@link #isThunderingRegionAt(ServerLevel, BlockPos)} 保持一致——后者为 true 时本方法必然大于 0.9。</p>
      */
     public static float thunderLevelAt(ServerLevel level, BlockPos pos) {
-        if (level == null || pos == null) {
+        if (level == null || pos == null || offThread(level)) {
             return 0.0F;
         }
         return switch (WeatherMode.current()) {
@@ -696,6 +947,9 @@ public final class WeatherManager {
      * 用它替换维度级的 getSkyDarken() 后，局部下雨/雷暴才不会把整张地图的亮度一起压低。
      */
     public static int skyDarkenAt(ServerLevel level, BlockPos pos) {
+        if (offThread(level)) {
+            return 0;
+        }
         return switch (WeatherMode.current()) {
             case MOBILE -> StormManager.skyDarkenAt(level, pos);
             case VANILLA -> skyDarkenFor(level, level.getRainLevel(1.0F), level.getThunderLevel(1.0F));
@@ -707,7 +961,21 @@ public final class WeatherManager {
         WeatherData.WeatherState state = stateOrNull(level, pos);
         float rain = state == null ? 0.0F : state.rainLevel();
         float thunder = state == null ? 0.0F : state.thunderLevel();
-        return skyDarkenFor(level, rain, thunder);
+        int base = skyDarkenFor(level, rain, thunder);
+        return state == null ? base : applyTypeSkyDarken(level, state.typeId(), base);
+    }
+
+    /**
+     * 天气类型自定义的天空变暗：{@code visuals.sky_darken} 是 0–1 的强度，映射到原版 0–11 的天空变暗值。
+     * 这样即使天气本身不降水（雾、沙尘暴等），也能像雷暴一样压低光照、允许刷怪。
+     */
+    public static int applyTypeSkyDarken(ServerLevel level, ResourceLocation typeId, int base) {
+        WeatherType type = WeatherTypes.resolve(level, typeId);
+        if (type == null) {
+            return base;
+        }
+        int typeDarken = Mth.ceil(Mth.clamp(type.visuals().skyDarken(), 0.0F, 1.0F) * 11.0F);
+        return Math.max(base, typeDarken);
     }
 
     /** 天空变暗公式（与原版 Level#updateSkyBrightness 一致），供片模式与风暴模式共用。 */
@@ -718,6 +986,15 @@ public final class WeatherManager {
     }
 
     /** 该位置当前的天气类型（供 API/调试）；缓存未命中时现场解析一次，仍然没有记录才返回晴天。 */
+    /** 该位置的天气类型 id（无记录返回晴天 id），供 API 的层视图使用。 */
+    public static ResourceLocation weatherTypeIdAt(ServerLevel level, BlockPos pos) {
+        if (level == null || pos == null || offThread(level)) {
+            return WeatherTypes.CLEAR_ID;
+        }
+        WeatherData.WeatherState state = stateOrNull(level, pos);
+        return state == null ? WeatherTypes.CLEAR_ID : state.typeId();
+    }
+
     public static WeatherType weatherTypeAt(ServerLevel level, BlockPos pos) {
         return switch (WeatherMode.current()) {
             case MOBILE -> StormManager.weatherTypeAt(level, pos);
@@ -776,14 +1053,14 @@ public final class WeatherManager {
      * <p>白名单/黑名单只约束自然循环，手动设置可以覆盖它们；被配置强制天气锁定的片仍会被跳过。
      * 设置的状态会记录为手动覆盖，计时结束后回到晴天，之后由名单决定是否重新参与自然循环。</p>
      */
-    public static void setWeather(ServerLevel level, Collection<String> patches,
-                                  ResourceLocation typeId, int duration) {
+    public static boolean setWeather(ServerLevel level, Collection<String> patches,
+                                     ResourceLocation typeId, int duration) {
+        if (typeId == null) {
+            return false;
+        }
         if (mobileMode()) {
             // 移动模式没有「片」的概念：把每个片中心转换成一次手动风暴，让命令/API 与片模式同样生效。
             // 最多尝试「手动风暴上限」次，避免 global 对成千上万个片逐个 removeWhere 扫描。
-            if (typeId == null) {
-                return;
-            }
             int budget = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);
             if (WeatherTypes.CLEAR_ID.equals(typeId)) {
                 // clear 不生成风暴：按处理过的片数扣预算，避免对全维度片逐个扫描
@@ -798,7 +1075,7 @@ public final class WeatherManager {
                     budget--;
                     StormManager.clearAtColumn(level, center, 0.0D);
                 }
-                return;
+                return true;
             }
             for (String patch : patches) {
                 if (budget <= 0) {
@@ -812,21 +1089,24 @@ public final class WeatherManager {
                 budget--;
                 StormManager.spawnManual(level, center, typeId, 0, duration);
             }
-            return;
+            return true;
         }
-        if (typeId == null) {
-            return;
+        WeatherType type = WeatherTypes.resolve(level, typeId);
+        if (type == null) {
+            // 未注册类型不能静默回落到晴天：那会把片的类型改成 clear，而调用方以为设置成功
+            Localizedrain.LOGGER.warn("[localizedrain] refusing to set unknown weather type {}", typeId);
+            return false;
         }
-        WeatherType type = WeatherTypes.byId(level, typeId);
         Collection<String> allowed = patches.stream()
                 .filter(patch -> WeatherBiomeFilter.forcedType(level, patch) == null)
                 .toList();
         if (allowed.isEmpty()) {
-            return;
+            return false;
         }
         boolean raining = type.hasPrecipitation();
         boolean thundering = raining && type.allowsThunder();
         data(level).setWeather(allowed, typeId.toString(), raining, thundering, duration, level.getRandom(), true);
+        return true;
     }
 
     /** 兼容层：把全局的 setWeatherParameters 调用翻译成「已记录的所有范围一起变天」。 */
@@ -1003,21 +1283,27 @@ public final class WeatherManager {
     }
 
     private static void send(ServerPlayer player, WeatherData.WeatherState state) {
-        WeatherType type = WeatherTypes.byId(player.serverLevel(), state.typeId());
+        // 热移除的类型不能再回落到晴天：那会让 HUD 显示晴天、强度恒 1，而实际雨量仍在
+        WeatherType type = WeatherTypes.resolve(player.serverLevel(), state.typeId());
         // 原版雨/雪渲染与雷声都只有一条通道：自定义类型靠 hasPrecipitation/allowsThunder 决定是否借用它们。
-        boolean raining = state.isRaining() && type.hasPrecipitation();
-        boolean thundering = state.isThundering() && type.allowsThunder();
-        boolean builtin = WeatherTypes.isBuiltin(state.typeId());
-        String typeKey = builtin ? "" : type.displayKey();
-        String typeId = builtin ? "" : state.typeId().toString();
-        float targetRain = state.rainLevel();
-        float targetThunder = state.thunderLevel();
+        boolean raining = type != null && state.isRaining() && type.hasPrecipitation();
+        boolean thundering = type != null && state.isThundering() && type.allowsThunder();
+        boolean builtin = type != null && WeatherTypes.isBuiltin(state.typeId());
+        String typeKey = (type == null || builtin) ? "" : type.displayKey();
+        String typeId = (type == null || builtin) ? "" : state.typeId().toString();
+        float targetRain = type == null ? 0.0F : state.rainLevel();
+        float targetThunder = type == null ? 0.0F : state.thunderLevel();
         // 展示强度：有降水的类型跟随雨量；无降水类型（雾/沙尘暴）按「是否处于天气现象中」给满值
-        float intensity = type.hasPrecipitation()
-                ? state.rainLevel()
-                : (state.isWeatherActive() ? 1.0F : 0.0F);
-        // 数据包定义的伤害/移速效果（只在片模式经过这里）
-        applyEffects(player, player.serverLevel(), state, type);
+        float intensity = type == null ? 0.0F
+                : (type.hasPrecipitation()
+                        ? state.rainLevel()
+                        : (state.isWeatherActive() ? 1.0F : 0.0F));
+        if (type != null) {
+            // 数据包定义的伤害/移速效果（只在片模式经过这里）
+            applyEffects(player, player.serverLevel(), state, type);
+        } else {
+            WeatherEffects.clear(player);   // 类型被移除后残留的移速/伤害不能继续挂着
+        }
 
         SentState last = LAST_SENT.get(player.getUUID());
         if (last == null) {
@@ -1038,7 +1324,10 @@ public final class WeatherManager {
         boolean targetChanged = last.raining != raining
                 || last.thundering != thundering
                 || !last.typeKey.equals(typeKey)
-                || !last.typeId.equals(typeId);
+                || !last.typeId.equals(typeId)
+                // 天气刚开始时 raining 先翻转、强度往往还接近 0；不比较强度的话之后爬升不再发包，
+                // 片模式下降水型自定义天气的客户端强度会永远停在首个快照值（几乎看不到粒子）
+                || Math.abs(last.intensity - intensity) > 0.005F;
 
         last.rainLevel = rainLevel;
         last.thunderLevel = thunderLevel;

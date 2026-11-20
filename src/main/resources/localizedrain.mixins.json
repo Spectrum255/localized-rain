@@ -10,7 +10,8 @@
     "MonsterSpawnMixin"
   ],
   "client": [
-    "LevelRendererMixin"
+    "LevelRendererMixin",
+    "ClientLevelMixin"
   ],
   "injectors": {
     "defaultRequire": 1

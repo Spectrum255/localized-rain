@@ -65,7 +65,9 @@ public final class StormSpawnSpec {
 
         private Builder(ResourceLocation profileId, Vec3 center) {
             this.profileId = profileId;
-            this.center = center;
+            // NaN/Inf 中心会把风暴坐标、距离回收与客户端渲染全部污染，入口处直接归零
+            this.center = center != null && Double.isFinite(center.x) && Double.isFinite(center.y)
+                    && Double.isFinite(center.z) ? center : Vec3.ZERO;
         }
 
         public Builder typeOverride(ResourceLocation typeId) {
@@ -74,7 +76,8 @@ public final class StormSpawnSpec {
         }
 
         public Builder radius(double radius) {
-            this.radius = radius;
+            // 上限由 StormManager.spawn 统一 clamp；这里只挡 NaN 与非法下限
+            this.radius = Double.isFinite(radius) ? Math.max(1.0D, radius) : null;
             return this;
         }
 
@@ -84,17 +87,18 @@ public final class StormSpawnSpec {
         }
 
         public Builder rainIntensity(float rain) {
-            this.rainIntensity = rain;
+            this.rainIntensity = Float.isFinite(rain) ? rain : null;
             return this;
         }
 
         public Builder thunderIntensity(float thunder) {
-            this.thunderIntensity = thunder;
+            this.thunderIntensity = Float.isFinite(thunder) ? thunder : null;
             return this;
         }
 
         public Builder velocity(double x, double z) {
-            this.velocity = new double[] {x, z};
+            // 非法速度按「未指定」处理：交给风场推进，而不是把 NaN 写进存档
+            this.velocity = Double.isFinite(x) && Double.isFinite(z) ? new double[] {x, z} : null;
             return this;
         }
 
@@ -109,7 +113,9 @@ public final class StormSpawnSpec {
         }
 
         public Builder verticalBand(double minY, double maxY) {
-            this.verticalBand = new double[] {Math.min(minY, maxY), Math.max(minY, maxY)};
+            if (Double.isFinite(minY) && Double.isFinite(maxY)) {
+                this.verticalBand = new double[] {Math.min(minY, maxY), Math.max(minY, maxY)};
+            }
             return this;
         }
 

@@ -2,12 +2,11 @@ package com.spectrum255.localizedrain.api;
 
 import com.spectrum255.localizedrain.Localizedrain;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderSet;
 import net.minecraft.core.Registry;
@@ -53,13 +52,13 @@ public final class WeatherTypes {
             TagKey.create(REGISTRY_KEY, ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "natural"));
 
     /** 按 id 缓存解析结果；注册表随数据包重载变化，配置重载/服务器启动时清空。 */
-    private static final Map<ResourceLocation, WeatherType> CACHE = new HashMap<>();
+    private static final Map<ResourceLocation, WeatherType> CACHE = new ConcurrentHashMap<>();
 
     /** 内置晴天被数据包改写时只提示一次（每次 {@link #invalidate()} 后重新提示）。 */
-    private static final Set<ResourceLocation> WARNED_BUILTIN = new HashSet<>();
+    private static final Set<ResourceLocation> WARNED_BUILTIN = ConcurrentHashMap.newKeySet();
 
     /** 天气类型自相矛盾（写了 precipitation 但 has_precipitation=false）每次重载只提示一次。 */
-    private static final Set<ResourceLocation> WARNED_INCONSISTENT = new HashSet<>();
+    private static final Set<ResourceLocation> WARNED_INCONSISTENT = ConcurrentHashMap.newKeySet();
 
     private WeatherTypes() {}
 
@@ -121,7 +120,8 @@ public final class WeatherTypes {
             return new WeatherType(type.displayKey(), type.display(),
                     false, Biome.Precipitation.NONE, false,
                     type.particle(), type.sound(), type.particleCount(), type.soundIntervalTicks(),
-                    type.visuals(), type.effects(), type.extra(), type.requiresSkylight(), type.skylight());
+                    type.visuals(), type.effects(), type.extra(), type.requiresSkylight(), type.skylight(),
+                    type.lifecycle(), type.next());
         }
         return type;
     }
@@ -170,6 +170,33 @@ public final class WeatherTypes {
         }
         Optional<HolderSet.Named<WeatherType>> tag = registry.getTag(TagKey.create(REGISTRY_KEY, tagId));
         return tag.map(WeatherTypes::collect).orElse(List.of());
+    }
+
+    /**
+     * 当前注册表里全部天气类型的内容指纹（id + 记录哈希，按 id 排序后混入）。
+     *
+     * <p>用途：{@code /reload} 后比较数据包定义是否真的变了。{@code localizedrain:weather_type} 是
+     * 登录/配置阶段同步的数据包注册表，服务端重载不会重新同步给已在线客户端；本模组只能在检测到变化时
+     * 提示玩家重连，而不是假装新定义已经生效。
+     */
+    public static long definitionDigest(Level level) {
+        Registry<WeatherType> registry = registry(level);
+        if (registry == null) {
+            return 0L;
+        }
+        List<String> entries = new ArrayList<>();
+        for (ResourceLocation id : registry.keySet()) {
+            WeatherType type = registry.get(id);
+            if (type != null) {
+                entries.add(id + "=" + type.hashCode());
+            }
+        }
+        entries.sort(null);
+        long hash = 0xCBF29CE484222325L;
+        for (String entry : entries) {
+            hash = (hash ^ entry.hashCode()) * 0x100000001B3L;
+        }
+        return hash;
     }
 
     /** 清空解析缓存（服务器启动、配置重载、数据包重载时调用）。 */

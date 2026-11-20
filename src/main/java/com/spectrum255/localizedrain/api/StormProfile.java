@@ -14,7 +14,11 @@ import net.minecraft.util.StringRepresentable;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
 
-/** 数据驱动风暴档案：形状、阶段序列、环境调制参数、允许生成的维度与生物群系。JSON 路径 data/<ns>/localizedrain/storm_profile/<id>.json。 */
+/**
+ * 数据驱动风暴档案：形状、阶段序列、环境调制参数、允许生成的维度与生物群系。JSON 路径 data/<ns>/localizedrain/storm_profile/<id>.json。
+ *
+ * @param natural 是否允许自然生成，默认 true；被加进 {@code natural} 标签时该字段仍须为 true（白名单交集）
+ */
 public record StormProfile(int weight, boolean natural, double speedMultiplier, Range radius,
                            VerticalMode vertical, List<Stage> stages, Environment environment,
                            List<StormBiomeSelector> biomes, List<DimensionSelector> dimensions,
@@ -70,7 +74,8 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
 
     /** 单个阶段。阈值字段缺省表示该档案不启用对应阈值。 */
     public record Stage(ResourceLocation type, int minTicks, int maxTicks, Range rain, Range thunder,
-                        Range radiusScale, Optional<Float> advanceWhenMoisture, Optional<Float> dieWhenMoisture) {
+                        Range radiusScale, Optional<Float> advanceWhenMoisture, Optional<Float> dieWhenMoisture,
+                        List<Transition> transitions) {
         private static final ResourceLocation DEFAULT_TYPE = ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "rain");
         /** 容错版资源位置：非法 id 回退内置降雨类型并给出 warn 级解析消息。 */
         public static final Codec<ResourceLocation> TOLERANT_TYPE_CODEC = Codec.STRING.comapFlatMap(
@@ -91,8 +96,27 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
                 Range.CODEC.optionalFieldOf("thunder", new Range(0.0D, 0.0D)).forGetter(Stage::thunder),
                 Range.CODEC.optionalFieldOf("radius_scale", new Range(1.0D, 1.0D)).forGetter(Stage::radiusScale),
                 Codec.FLOAT.optionalFieldOf("advance_when_moisture").forGetter(Stage::advanceWhenMoisture),
-                Codec.FLOAT.optionalFieldOf("die_when_moisture").forGetter(Stage::dieWhenMoisture)
+                Codec.FLOAT.optionalFieldOf("die_when_moisture").forGetter(Stage::dieWhenMoisture),
+                Transition.CODEC.listOf().optionalFieldOf("transitions", List.of()).forGetter(Stage::transitions)
         ).apply(instance, Stage::new));
+    }
+
+    /**
+     * 阶段分支：按权重从当前阶段演化到目标阶段；条件缺省表示不限制。
+     * {@code type} 可选，用于覆盖目标阶段的天气类型（例如雷暴分支）。
+     */
+    public record Transition(int stage, int weight, Optional<Float> minMoisture, Optional<Float> maxMoisture,
+                             Optional<Float> minTemperature, Optional<Float> maxTemperature,
+                             Optional<ResourceLocation> type) {
+        public static final Codec<Transition> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+                Codec.INT.fieldOf("stage").forGetter(Transition::stage),
+                Codec.INT.optionalFieldOf("weight", 1).forGetter(Transition::weight),
+                Codec.FLOAT.optionalFieldOf("min_moisture").forGetter(Transition::minMoisture),
+                Codec.FLOAT.optionalFieldOf("max_moisture").forGetter(Transition::maxMoisture),
+                Codec.FLOAT.optionalFieldOf("min_temperature").forGetter(Transition::minTemperature),
+                Codec.FLOAT.optionalFieldOf("max_temperature").forGetter(Transition::maxTemperature),
+                Stage.TOLERANT_TYPE_CODEC.optionalFieldOf("type").forGetter(Transition::type)
+        ).apply(instance, Transition::new));
     }
 
     /** 环境层参数。 */
@@ -133,11 +157,12 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
     private static DataResult<StormProfile> sanitize(StormProfile profile) {
         // 数据包注册表 codec error 会中止整个世界加载（不是跳过单个档案）：空阶段时补一个默认降雨阶段。
         boolean emptyStages = profile.stages().isEmpty();
-        List<Stage> stages = new ArrayList<>(Math.max(1, profile.stages().size()));
+        int stageCount = Math.max(1, profile.stages().size());
+        List<Stage> stages = new ArrayList<>(stageCount);
         if (emptyStages) {
             stages.add(new Stage(ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "rain"),
                     4000, 8000, new Range(0.4D, 0.7D), new Range(0.0D, 0.0D), new Range(1.0D, 1.0D),
-                    Optional.empty(), Optional.empty()));
+                    Optional.empty(), Optional.empty(), List.of()));
         }
         for (Stage stage : profile.stages()) {
             int minTicks = Math.max(1, stage.minTicks());
@@ -147,14 +172,16 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
             Range scale = clamp(stage.radiusScale(), 0.0D, 4.0D);
             Optional<Float> advance = stage.advanceWhenMoisture().map(StormProfile::clamp01);
             Optional<Float> die = stage.dieWhenMoisture().map(StormProfile::clamp01);
-            stages.add(new Stage(stage.type(), minTicks, maxTicks, rain, thunder, scale, advance, die));
+            stages.add(new Stage(stage.type(), minTicks, maxTicks, rain, thunder, scale, advance, die,
+                    sanitizeTransitions(stage.transitions(), stageCount)));
         }
         // 半径是随机生成区间，顺序无意义：统一整理为升序（旧实现会把递减区间压成 [min, min]）
         double lowRadius = Math.min(profile.radius().min(), profile.radius().max());
         double highRadius = Math.max(profile.radius().min(), profile.radius().max());
         double minRadius = Math.max(1.0D, lowRadius);
         double maxRadius = Math.max(minRadius, highRadius);
-        int weight = Math.max(1, profile.weight());
+        // 权重参与生成抽样：下限 1，上限收窄到 100 万，避免数据包写极端值时抽样总和不必要地巨大
+        int weight = Math.min(1_000_000, Math.max(1, profile.weight()));
         double speed = Math.max(0.01D, profile.speedMultiplier());
         List<StormBiomeSelector> biomes = new ArrayList<>(profile.biomes().size());
         StormBiomeSelector firstInvalidBiome = null;
@@ -216,6 +243,25 @@ public record StormProfile(int weight, boolean natural, double speedMultiplier, 
             }
         }
         return DataResult.success(result);
+    }
+
+    /** 分支目标越界钳到末阶段、权重 1–1e6、条件夹到 0–1；其余字段保持原样。 */
+    private static List<Transition> sanitizeTransitions(List<Transition> raw, int stageCount) {
+        if (raw.isEmpty()) {
+            return List.of();
+        }
+        List<Transition> transitions = new ArrayList<>(raw.size());
+        for (Transition transition : raw) {
+            int target = Math.max(0, Math.min(stageCount - 1, transition.stage()));
+            int weight = Math.min(1_000_000, Math.max(1, transition.weight()));
+            transitions.add(new Transition(target, weight,
+                    transition.minMoisture().map(StormProfile::clamp01),
+                    transition.maxMoisture().map(StormProfile::clamp01),
+                    transition.minTemperature().map(StormProfile::clamp01),
+                    transition.maxTemperature().map(StormProfile::clamp01),
+                    transition.type()));
+        }
+        return List.copyOf(transitions);
     }
 
     /** 是否有任一阶段的天气类型允许落雷；无天光维度据此拒绝雷暴档案（不只检查 stage 0）。 */

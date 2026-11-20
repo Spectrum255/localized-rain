@@ -23,7 +23,8 @@ public final class StormProfiles {
 
     /**
      * 自然生成池标签：`data/<命名空间>/tags/localizedrain/storm_profile/natural.json`。
-     * 标签存在（且非空）时以标签成员为准，否则回退到档案里的 {@code "natural": true}。
+     * 标签存在（且非空）时作为**白名单交集**：档案必须同时满足「在标签内」与「{@code natural=true}」；
+     * 没有标签时回退到档案里的 {@code "natural": true}（默认值）。
      */
     public static final TagKey<StormProfile> NATURAL_TAG =
             TagKey.create(REGISTRY_KEY, ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, "natural"));
@@ -33,6 +34,10 @@ public final class StormProfiles {
             presetId("snow"), presetId("blizzard"), presetId("sandstorm"), presetId("fog"),
             presetId("overcast"), presetId("ashstorm"), presetId("soulmist"),
             presetId("voidstorm"), presetId("voidhaze"));
+
+    /** 每个维度只提示一次「自然风暴池为空」，避免每次生成检查都刷日志。 */
+    private static final java.util.Set<ResourceKey<Level>> WARNED_EMPTY =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private static ResourceLocation presetId(String path) {
         return ResourceLocation.fromNamespaceAndPath(Localizedrain.MODID, path);
@@ -46,11 +51,23 @@ public final class StormProfiles {
     }
 
     public static Optional<Holder.Reference<StormProfile>> byId(Level level, ResourceLocation id) {
+        if (level == null || id == null) {
+            return Optional.empty();    // 数据包 id 可能来自损坏存档/外部 API，null 不应变成 NPE
+        }
         Registry<StormProfile> registry = level.registryAccess().registry(REGISTRY_KEY).orElse(null);
         return registry == null ? Optional.empty() : registry.getHolder(id);
     }
 
-    /** 自然生成池：优先使用 {@link #NATURAL_TAG} 标签成员，否则回退到 {@code natural=true} 的档案。 */
+    /**
+     * 自然生成池：标签存在时为白名单交集——档案必须同时在 {@link #NATURAL_TAG} 标签里，
+     * 且档案自己的 {@code natural} 字段为 {@code true}（默认 true）；没有标签时回退到 {@code natural=true} 的档案。
+     *
+     * <p>标签只做「白名单追加」，不会覆盖档案自己的 {@code natural} 字段：显式写 {@code natural=false}
+     * 的档案永远不进入自然池，即使被加进标签也一样。</p>
+     *
+     * <p>内置预设默认关闭，但只在「无天光维度」（下界/末地，{@code skylight=forbidden}）保留，
+     * 避免关掉开关后这两个维度的自然风暴池变空。</p>
+     */
     public static List<Holder.Reference<StormProfile>> naturalPool(Level level) {
         Registry<StormProfile> registry = level.registryAccess().registry(REGISTRY_KEY).orElse(null);
         if (registry == null) {
@@ -66,11 +83,31 @@ public final class StormProfiles {
                     && profile.skylight() != SkylightMode.FORBIDDEN) {
                 continue;
             }
-            if (tagged ? holder.is(NATURAL_TAG) : profile.natural()) {
+            // 标签是白名单，但档案自己的 natural=false 始终优先：否则数据包作者写 false 会被标签静默覆盖
+            if (!profile.natural()) {
+                continue;
+            }
+            if (!tagged || holder.is(NATURAL_TAG)) {
                 pool.add(holder);
             }
         }
+        if (pool.isEmpty()) {
+            if (WARNED_EMPTY.add(level.dimension())) {
+                Localizedrain.LOGGER.warn("[localizedrain] natural storm pool for {} is empty "
+                                + "(enableBuiltinPresets={}); no natural storms will spawn there. "
+                                + "Add a non-preset profile with \"natural\": true or include it in the natural tag.",
+                        level.dimension().location(), Config.builtinPresetsEnabled());
+            }
+        } else {
+            // 池恢复非空后允许下次再提示（例如数据包修好后又被改坏）
+            WARNED_EMPTY.remove(level.dimension());
+        }
         return pool;
+    }
+
+    /** 服务器停止 / 配置重载 / 数据包重载后重新允许「自然池为空」告警。 */
+    public static void resetWarnings() {
+        WARNED_EMPTY.clear();
     }
 
     /** 某个风暴档案所属的标签 id 列表（读档时由数据包决定，可用于自定义生成逻辑）。 */

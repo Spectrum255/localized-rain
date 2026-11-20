@@ -30,7 +30,11 @@ public final class LoadedChunks {
 
     public static void onChunkUnload(ChunkEvent.Unload event) {
         if (event.getLevel() instanceof ServerLevel level) {
-            chunks(level).remove(event.getChunk().getPos().toLong());
+            // 用 get 而不是 computeIfAbsent：维度已卸载时不要把 ServerLevel 重新塞回弱引用表
+            LongOpenHashSet loaded = LOADED.get(level);
+            if (loaded != null) {
+                loaded.remove(event.getChunk().getPos().toLong());
+            }
         }
     }
 

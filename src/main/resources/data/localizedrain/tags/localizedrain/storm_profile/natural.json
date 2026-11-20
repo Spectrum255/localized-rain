@@ -4,15 +4,6 @@
     "localizedrain:drizzle",
     "localizedrain:shower",
     "localizedrain:thunderstorm",
-    "localizedrain:squall",
-    "localizedrain:blizzard",
-    "localizedrain:sandstorm",
-    "localizedrain:fog",
-    "localizedrain:overcast",
-    "localizedrain:snow",
-    "localizedrain:ashstorm",
-    "localizedrain:soulmist",
-    "localizedrain:voidstorm",
-    "localizedrain:voidhaze"
+    "localizedrain:squall"
   ]
 }

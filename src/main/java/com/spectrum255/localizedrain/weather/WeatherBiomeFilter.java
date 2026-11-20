@@ -2,7 +2,6 @@ package com.spectrum255.localizedrain.weather;
 
 import com.mojang.logging.LogUtils;
 import com.spectrum255.localizedrain.Config;
-import com.spectrum255.localizedrain.FilterConfig;
 import com.spectrum255.localizedrain.api.WeatherType;
 import com.spectrum255.localizedrain.api.WeatherTypes;
 import java.util.ArrayList;
@@ -282,9 +281,9 @@ public final class WeatherBiomeFilter {
     }
 
     private static Snapshot build(ServerLevel level) {
-        List<TypeRule> whitelist = buildTypeRules(level, FilterConfig.BIOME_WEATHER_WHITELIST.get(),
+        List<TypeRule> whitelist = buildTypeRules(level, Config.BIOME_WEATHER_WHITELIST.get(),
                 "weatherBiomeWhitelist");
-        List<TypeRule> blacklist = buildTypeRules(level, FilterConfig.BIOME_WEATHER_BLACKLIST.get(),
+        List<TypeRule> blacklist = buildTypeRules(level, Config.BIOME_WEATHER_BLACKLIST.get(),
                 "weatherBiomeBlacklist");
         List<OverrideRule> overrides = buildOverrides(level);
         List<ResourceLocation> naturalPool = WeatherTypes.naturalIds(level);
@@ -297,6 +296,13 @@ public final class WeatherBiomeFilter {
             naturalPool = naturalPool.stream()
                     .filter(typeId -> !WeatherTypes.isPreset(typeId))
                     .toList();
+            if (naturalPool.isEmpty()) {
+                // 过滤前只有预设类型：此时自然池会静默变空，必须在启动日志里说清楚
+                LOGGER.warn("No natural weather types left after excluding built-in presets: "
+                        + "enable 'enableBuiltinPresets' or add non-preset types to the '{}' tag, "
+                        + "otherwise no biome will cycle weather by default",
+                        WeatherTypes.NATURAL.location());
+            }
         }
         return new Snapshot(overrides, whitelist, blacklist, naturalPool);
     }
@@ -333,7 +339,7 @@ public final class WeatherBiomeFilter {
     /** 解析强制天气：{@code selector=weather}，不支持天气标签，多条命中时按顺序取第一条。 */
     private static List<OverrideRule> buildOverrides(ServerLevel level) {
         List<OverrideRule> result = new ArrayList<>();
-        for (String raw : FilterConfig.BIOME_WEATHER_OVERRIDES.get()) {
+        for (String raw : Config.BIOME_WEATHER_OVERRIDES.get()) {
             String entry = raw == null ? "" : raw.trim();
             if (entry.isEmpty()) {
                 continue;

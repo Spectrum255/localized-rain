@@ -1,0 +1,14 @@
+{
+  "replace": false,
+  "values": [
+    "localizedrain:blizzard",
+    "localizedrain:sandstorm",
+    "localizedrain:fog",
+    "localizedrain:overcast",
+    "localizedrain:snow",
+    "localizedrain:ashstorm",
+    "localizedrain:soulmist",
+    "localizedrain:voidstorm",
+    "localizedrain:voidhaze"
+  ]
+}

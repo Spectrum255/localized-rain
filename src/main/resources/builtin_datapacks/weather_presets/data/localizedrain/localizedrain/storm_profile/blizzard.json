@@ -1,0 +1,46 @@
+{
+  "weight": 8,
+  "natural": true,
+  "speed_multiplier": 0.85,
+  "radius": [200, 330],
+  "vertical": "surface",
+  "skylight": "required",
+  "biomes": [
+    "minecraft:snowy_plains",
+    "minecraft:snowy_taiga",
+    "minecraft:snowy_slopes",
+    "minecraft:ice_spikes",
+    "minecraft:frozen_peaks",
+    "minecraft:grove",
+    "minecraft:snowy_beach",
+    "minecraft:frozen_river",
+    "minecraft:frozen_ocean"
+  ],
+  "stages": [
+    {
+      "type": "localizedrain:blizzard",
+      "min_ticks": 2400,
+      "max_ticks": 4800,
+      "rain": [0.8, 1.0],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [0.9, 1.0]
+    },
+    {
+      "type": "localizedrain:blizzard",
+      "min_ticks": 4000,
+      "max_ticks": 8000,
+      "rain": [0.8, 1.0],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [1.0, 1.2]
+    },
+    {
+      "type": "localizedrain:blizzard",
+      "min_ticks": 2000,
+      "max_ticks": 4000,
+      "rain": [0.8, 1.0],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [1.2, 0.9]
+    }
+  ],
+  "environment": { "stage_speed_from_moisture": false, "moisture_gain": 0.0, "moisture_decay": 0.003 }
+}

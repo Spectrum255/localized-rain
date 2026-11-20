@@ -1,0 +1,28 @@
+{
+  "display_key": "weather.localizedrain.sandstorm",
+  "has_precipitation": false,
+  "precipitation": "none",
+  "allows_thunder": false,
+  "skylight": "required",
+  "particle": "minecraft:mycelium",
+  "sound": "minecraft:block.sand.break",
+  "particle_count": 140,
+  "sound_interval_ticks": 45,
+  "visuals": {
+    "fog_color": "#8a7050",
+    "fog_near": 24,
+    "fog_far": 128,
+    "particle_motion": [0.55, -0.02, 0.18],
+    "sky_darken": 0.5,
+    "sky_color": "#8f7248",
+    "cloud_color": "#b09060",
+    "sunrise_color": "#c08a40",
+    "star_brightness": 0.0,
+    "sun_visible": false,
+    "moon_visible": false
+  },
+  "effects": {
+    "damage": { "amount": 0.5, "interval_ticks": 60, "only_when_exposed": true },
+    "movement_speed": 0.9
+  }
+}

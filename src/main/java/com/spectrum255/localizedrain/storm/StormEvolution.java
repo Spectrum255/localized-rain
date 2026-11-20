@@ -1,8 +1,10 @@
 package com.spectrum255.localizedrain.storm;
 
 import com.spectrum255.localizedrain.api.StormProfile;
+import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BiomeTags;
 import net.minecraft.util.Mth;
@@ -52,6 +54,61 @@ final class StormEvolution {
         return profile.stage(storm.stageIndex).advanceWhenMoisture()
                 .map(threshold -> storm.moisture >= threshold)
                 .orElse(false);
+    }
+
+    /** 阶段推进结果：{@code stage < 0} 表示没有可去的阶段（进入淡出）；{@code type} 可选覆盖目标阶段类型。 */
+    record Next(int stage, ResourceLocation type) {
+        static final Next END = new Next(-1, null);
+    }
+
+    /**
+     * 选择下一阶段：优先按当前阶段 {@code transitions} 的权重抽取「条件满足」的分支；
+     * 没有 transitions、没有满足项或目标就是当前阶段时，回退到线性下一阶段；末阶段返回 {@link Next#END}。
+     */
+    static Next nextStage(ServerLevel level, StormObject storm, StormProfile profile) {
+        StormProfile.Stage current = profile.stage(storm.stageIndex());
+        int linear = storm.stageIndex() + 1 < profile.stages().size() ? storm.stageIndex() + 1 : -1;
+        List<StormProfile.Transition> transitions = current.transitions();
+        if (transitions.isEmpty()) {
+            return linear < 0 ? Next.END : new Next(linear, null);
+        }
+        int total = 0;
+        for (StormProfile.Transition transition : transitions) {
+            if (eligible(transition, storm)) {
+                total += transition.weight();
+            }
+        }
+        if (total <= 0) {
+            return linear < 0 ? Next.END : new Next(linear, null);
+        }
+        int pick = level.getRandom().nextInt(total);
+        for (StormProfile.Transition transition : transitions) {
+            if (!eligible(transition, storm)) {
+                continue;
+            }
+            pick -= transition.weight();
+            if (pick < 0) {
+                return new Next(transition.stage(), transition.type().orElse(null));
+            }
+        }
+        return linear < 0 ? Next.END : new Next(linear, null);
+    }
+
+    /** 分支可用：目标不是当前阶段，且温湿度落在条件区间内。 */
+    private static boolean eligible(StormProfile.Transition transition, StormObject storm) {
+        if (transition.stage() == storm.stageIndex()) {
+            return false;
+        }
+        if (transition.minMoisture().isPresent() && storm.moisture < transition.minMoisture().get()) {
+            return false;
+        }
+        if (transition.maxMoisture().isPresent() && storm.moisture > transition.maxMoisture().get()) {
+            return false;
+        }
+        if (transition.minTemperature().isPresent() && storm.temperature < transition.minTemperature().get()) {
+            return false;
+        }
+        return transition.maxTemperature().map(value -> storm.temperature <= value).orElse(true);
     }
 
     /** 阈值触发：返回 true 表示本 tick 应该开始消亡。 */

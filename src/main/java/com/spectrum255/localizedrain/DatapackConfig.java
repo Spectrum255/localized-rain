@@ -36,6 +36,8 @@ public final class DatapackConfig {
     private static boolean loaded;
     private static boolean dirty;
     private static boolean warnedUnreadable;
+    /** 文件解析失败时置位：只备份、不重写，避免把用户手改的逐包开关覆盖成全开。 */
+    private static boolean preserveFile;
 
     private DatapackConfig() {
     }
@@ -69,10 +71,14 @@ public final class DatapackConfig {
                 }
             }
         } catch (IOException | RuntimeException exception) {
+            // 解析失败：保留原文件（只做一次 .broken 备份），不按默认值重写，
+            // 否则会把用户手改的逐包开关覆盖成「全部启用」。
+            preserveFile = true;
+            dirty = true;
             if (!warnedUnreadable) {
                 warnedUnreadable = true;
-                LOGGER.warn("[localizedrain] could not read {}; assuming every config datapack is enabled",
-                        file, exception);
+                LOGGER.warn("[localizedrain] could not read {}; assuming every config datapack is enabled "
+                        + "and keeping the file untouched", file, exception);
             }
         }
     }
@@ -111,6 +117,23 @@ public final class DatapackConfig {
         if (!dirty && Files.exists(file)) {
             return;
         }
+        if (preserveFile) {
+            // 解析失败：只备份一次，不覆盖原文件——用户可能只是写错了一个字符，重写会丢掉他的开关
+            dirty = false;
+            if (Files.exists(file)) {
+                Path backup = file.resolveSibling(file.getFileName() + ".broken");
+                if (Files.notExists(backup)) {
+                    try {
+                        Files.copy(file, backup);
+                        LOGGER.warn("[localizedrain] kept unreadable {} untouched; backup written to {}",
+                                file, backup);
+                    } catch (IOException exception) {
+                        LOGGER.warn("[localizedrain] could not back up {}", file, exception);
+                    }
+                }
+            }
+            return;
+        }
         StringBuilder builder = new StringBuilder();
         builder.append("# Localized Rain - config datapacks\n");
         builder.append("# 数据包放在 config/localizedrain/datapacks/<name>/ 下，必须带 pack.mcmeta。\n");
@@ -124,19 +147,25 @@ public final class DatapackConfig {
             }
             builder.append('"').append(escape(entry.getKey())).append("\" = ").append(entry.getValue()).append('\n');
         }
+        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
         try {
             Files.createDirectories(file.getParent());
-            if (warnedUnreadable && Files.exists(file)) {
-                // 文件曾经解析失败：先备份再重写，避免把用户手改的逐包开关直接覆盖掉
-                Path backup = file.resolveSibling(file.getFileName() + ".broken");
-                Files.copy(file, backup, StandardCopyOption.REPLACE_EXISTING);
-                LOGGER.warn("[localizedrain] previous {} could not be parsed; wrote a backup to {}",
-                        file, backup);
+            // 先写临时文件再原子替换：写到一半崩溃也不会留下半截 TOML
+            Files.writeString(tmp, builder.toString(), StandardCharsets.UTF_8);
+            try {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException atomicFailed) {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
             }
-            Files.writeString(file, builder.toString(), StandardCharsets.UTF_8);
             dirty = false;
         } catch (IOException exception) {
             LOGGER.warn("[localizedrain] could not write {}", file, exception);
+        } finally {
+            try {
+                Files.deleteIfExists(tmp);
+            } catch (IOException ignored) {
+                // 清理失败不影响本次写回结果
+            }
         }
     }
 

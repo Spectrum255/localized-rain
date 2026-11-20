@@ -10,15 +10,21 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.saveddata.SavedData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -134,6 +140,14 @@ public final class WeatherData extends SavedData {
     }
 
     /**
+     * 该片当前应使用的规范 key：并查集合并后同一分量只有一个 key。
+     * 相邻列可能在两次扫描之间被合并，调用方用它去重，避免同一个状态一轮内被推进两次。
+     */
+    public String canonicalKey(String patch) {
+        return this.canonical(patch);
+    }
+
+    /**
      * 两个段分量合并时，把被吸收方的天气状态迁移到新的规范 key。
      * 双方都有状态时保留规范 key 那份（结果确定，便于跨重启复现）。
      */
@@ -225,7 +239,9 @@ public final class WeatherData extends SavedData {
             int duration = requestedDuration;
             if (varyDuration) {
                 int variance = Math.max(1, requestedDuration / 10);
-                duration = Math.max(1, requestedDuration + random.nextInt(variance * 2 + 1) - variance);
+                // 用 long 计算再钳位：大时长 + 抖动可能超出 int 范围
+                long jittered = (long) requestedDuration + random.nextInt(variance * 2 + 1) - variance;
+                duration = (int) Math.min(Math.max(1L, jittered), Integer.MAX_VALUE);
             }
             this.getOrCreate(patch, random).apply(typeId, raining, thundering, duration, random, manual);
         }
@@ -261,11 +277,16 @@ public final class WeatherData extends SavedData {
     public void tick(ServerLevel level, RandomSource random, boolean cycleWeather, Collection<String> patches,
                      long gameTime, Map<String, List<WeatherBiomeFilter.Candidate>> candidates) {
         boolean changed = false;
+        boolean evolution = Config.patchEvolutionEnabled();
         for (String patch : patches) {
             WeatherState state = this.getOrCreate(patch, random);
             state.lastTick = gameTime;
             WeatherType currentType = WeatherTypes.resolve(level, state.typeId());
-            changed |= state.tick(random, cycleWeather, candidates.get(patch), currentType);
+            List<WeatherBiomeFilter.Candidate> pool = candidates.get(patch);
+            java.util.function.Function<WeatherType, Optional<ResourceLocation>> picker = evolution
+                    ? type -> WeatherState.pickEvolution(level, patch, type, pool, random) : null;
+            changed |= state.tick(random, cycleWeather, pool, currentType, picker);
+            state.refreshRamp(WeatherTypes.resolve(level, state.typeId()));
         }
         if (changed) {
             this.setDirty();
@@ -282,11 +303,17 @@ public final class WeatherData extends SavedData {
             return;
         }
         boolean changed = false;
+        boolean evolution = Config.patchEvolutionEnabled();
+        java.util.function.Function<ResourceLocation, WeatherType> resolver = id -> WeatherTypes.resolve(level, id);
         for (String patch : patches) {
             WeatherState state = this.getOrCreate(patch, random);
             state.lastTick = gameTime;
             WeatherType currentType = WeatherTypes.resolve(level, state.typeId());
-            changed |= state.tick(random, cycleWeather, candidates.get(patch), currentType, steps);
+            List<WeatherBiomeFilter.Candidate> pool = candidates.get(patch);
+            java.util.function.Function<WeatherType, Optional<ResourceLocation>> picker = evolution
+                    ? type -> WeatherState.pickEvolution(level, patch, type, pool, random) : null;
+            changed |= state.tick(random, cycleWeather, pool, currentType, steps, resolver, picker);
+            state.refreshRamp(WeatherTypes.resolve(level, state.typeId()));
         }
         if (changed) {
             this.setDirty();
@@ -628,6 +655,10 @@ public final class WeatherData extends SavedData {
         private boolean manual;
         /** 手动覆盖剩余 tick；manual=false 时无意义。 */
         private int manualTime;
+        /** 当前天气类型已持续 tick 数；用于 {@link WeatherType.Lifecycle} 的淡入/淡出。 */
+        private long ageTicks;
+        /** 片模式强度乘子（0–1），由 {@link #refreshRamp} 按类型生命周期计算。 */
+        private float rampFactor = 1.0F;
 
         private WeatherState() {}
 
@@ -656,6 +687,11 @@ public final class WeatherData extends SavedData {
             // 0.1.x 存档里的 precipitating / thunder_allowed 已废弃：能力位每次按天气类型现算
             state.manual = tag.getBoolean("manual");
             state.manualTime = tag.getInt("manual_time");
+            state.ageTicks = Math.max(0L, tag.getLong("age_ticks"));
+            state.rampFactor = Mth.clamp(tag.getFloat("ramp_factor"), 0.0F, 1.0F);
+            if (!tag.contains("ramp_factor")) {
+                state.rampFactor = 1.0F;
+            }
             String rawType = tag.getString("weather_type");
             state.type = rawType.isEmpty() ? state.builtinType() : parseType(rawType);
             return state;
@@ -674,14 +710,18 @@ public final class WeatherData extends SavedData {
             tag.putBoolean("forced", this.forced);
             tag.putBoolean("manual", this.manual);
             tag.putInt("manual_time", this.manualTime);
+            tag.putLong("age_ticks", this.ageTicks);
+            tag.putFloat("ramp_factor", this.rampFactor);
             tag.putString("weather_type", this.type.toString());
             return tag;
         }
 
         private boolean tick(RandomSource random, boolean cycleWeather,
-                             List<WeatherBiomeFilter.Candidate> candidates, WeatherType currentType) {
+                             List<WeatherBiomeFilter.Candidate> candidates, WeatherType currentType,
+                             java.util.function.Function<WeatherType, Optional<ResourceLocation>> evolution) {
             boolean changed = false;
             boolean flagsChanged = false;
+            ResourceLocation typeBefore = this.type;
             boolean candidateMode = candidates != null && !candidates.isEmpty();
             // 能力位不再存字段：每次按当前天气类型现算；类型变化时同步更新这两个局部变量
             boolean precipitates = currentType != null && currentType.hasPrecipitation();
@@ -696,8 +736,18 @@ public final class WeatherData extends SavedData {
                 }
                 if (--this.rainTime <= 0) {
                     if (candidateMode) {
+                        // 先尝试按当前类型的 next 演化；不可用时回退到该群的随机天气池
+                        WeatherBiomeFilter.Candidate chosen = null;
+                        if (evolution != null) {
+                            ResourceLocation evolved = evolution.apply(currentType).orElse(null);
+                            if (evolved != null) {
+                                chosen = findCandidate(candidates, evolved);
+                            }
+                        }
+                        if (chosen == null) {
+                            chosen = candidates.get(random.nextInt(candidates.size()));
+                        }
                         // 从该群的天气池里抽一种；池里可以包含晴天
-                        WeatherBiomeFilter.Candidate chosen = candidates.get(random.nextInt(candidates.size()));
                         this.type = chosen.id();
                         this.raining = !chosen.clear();
                         this.thundering = false;
@@ -754,11 +804,117 @@ public final class WeatherData extends SavedData {
             }
             float oldRain = this.rainLevel;
             float oldThunder = this.thunderLevel;
+            if (typeBefore.equals(this.type)) {
+                this.ageTicks++;
+            } else {
+                this.ageTicks = 0L;
+            }
             this.rainLevel = Mth.clamp(this.rainLevel
                     + (this.raining && precipitates ? 0.01F : -0.01F), 0.0F, 1.0F);
             this.thunderLevel = Mth.clamp(this.thunderLevel
                     + (this.thundering && this.raining && precipitates ? 0.01F : -0.01F), 0.0F, 1.0F);
             return changed || oldRain != this.rainLevel || oldThunder != this.thunderLevel;
+        }
+
+        /**
+         * 按当前类型与已持续时间刷新片模式强度乘子（0–1）。手动/强制状态渐变恒为 1（它们有独立计时器），
+         * 生命周期未启用或类型没写 lifecycle 时也为 1。
+         */
+        void refreshRamp(WeatherType type) {
+            if (this.manual || this.forced || type == null || !Config.patchLifecycleEnabled()
+                    || !type.lifecycle().enabled()) {
+                this.rampFactor = 1.0F;
+                return;
+            }
+            this.rampFactor = type.lifecycle().factor(this.ageTicks, this.rainTime);
+        }
+
+        private static WeatherBiomeFilter.Candidate findCandidate(List<WeatherBiomeFilter.Candidate> candidates,
+                                                                  ResourceLocation id) {
+            for (WeatherBiomeFilter.Candidate candidate : candidates) {
+                if (candidate.id().equals(id)) {
+                    return candidate;
+                }
+            }
+            return null;
+        }
+
+        /**
+         * 片模式演化：当前天气的计时器到期时，按 {@link WeatherType#next()} 里的权重抽取下一个天气。
+         *
+         * <p>候选必须通过三层过滤：仍然注册、在该片的候选池里（白名单/黑名单/锁定已由池体现）、
+         * 片所在群系满足温度/标签条件。全部不可用时返回空，调用方回退到原有的随机候选池。</p>
+         */
+        private static Optional<ResourceLocation> pickEvolution(ServerLevel level, String patch, WeatherType current,
+                                                                List<WeatherBiomeFilter.Candidate> pool,
+                                                                RandomSource random) {
+            if (current == null || current.next().isEmpty() || pool == null || pool.isEmpty()) {
+                return Optional.empty();
+            }
+            BiomeInfo biome = biomeInfo(level, patch);
+            int total = 0;
+            List<WeatherType.Evolution> eligible = new ArrayList<>(current.next().size());
+            for (WeatherType.Evolution candidate : current.next()) {
+                if (candidate.weight() <= 0 || !poolContains(pool, candidate.type())
+                        || WeatherTypes.resolve(level, candidate.type()) == null || !biome.matches(candidate)) {
+                    continue;
+                }
+                eligible.add(candidate);
+                total += candidate.weight();
+            }
+            if (total <= 0) {
+                return Optional.empty();
+            }
+            int roll = random.nextInt(total);
+            for (WeatherType.Evolution candidate : eligible) {
+                roll -= candidate.weight();
+                if (roll < 0) {
+                    return Optional.of(candidate.type());
+                }
+            }
+            return Optional.empty();
+        }
+
+        private static boolean poolContains(List<WeatherBiomeFilter.Candidate> pool, ResourceLocation id) {
+            for (WeatherBiomeFilter.Candidate candidate : pool) {
+                if (candidate.id().equals(id)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static BiomeInfo biomeInfo(ServerLevel level, String patch) {
+            ResourceLocation biomeId = BiomePatches.patchBiome(level, patch);
+            net.minecraft.core.Registry<Biome> registry = level.registryAccess().registryOrThrow(Registries.BIOME);
+            Biome biome = biomeId == null ? null : registry.get(biomeId);
+            if (biome == null) {
+                return new BiomeInfo(0.8F, Optional.empty());
+            }
+            ResourceKey<Biome> key = registry.getResourceKey(biome).orElse(null);
+            Optional<Holder.Reference<Biome>> holder = key == null ? Optional.empty() : registry.getHolder(key);
+            return new BiomeInfo(biome.getBaseTemperature(), holder);
+        }
+
+        private record BiomeInfo(float temperature, Optional<Holder.Reference<Biome>> holder) {
+            boolean matches(WeatherType.Evolution evolution) {
+                if (evolution.minBiomeTemperature().isPresent()
+                        && this.temperature < evolution.minBiomeTemperature().get()) {
+                    return false;
+                }
+                if (evolution.maxBiomeTemperature().isPresent()
+                        && this.temperature > evolution.maxBiomeTemperature().get()) {
+                    return false;
+                }
+                if (evolution.biomeTag().isPresent()) {
+                    if (this.holder.isEmpty()) {
+                        return false;
+                    }
+                    TagKey<Biome> tag = TagKey.create(Registries.BIOME, evolution.biomeTag().get());
+                    return this.holder.get().is(tag);
+                }
+                return true;
+            }
         }
 
         /** 当前内置类型对应的常量（能力位查询用；自定义类型请走 WeatherTypes.resolve）。 */
@@ -777,9 +933,11 @@ public final class WeatherData extends SavedData {
          * 避免每轮扫描都对每个片做 {@code steps} 次完整逻辑；会翻转时退回逐 tick 循环。
          */
         private boolean tick(RandomSource random, boolean cycleWeather,
-                             List<WeatherBiomeFilter.Candidate> candidates, WeatherType currentType, int steps) {
+                             List<WeatherBiomeFilter.Candidate> candidates, WeatherType currentType, int steps,
+                             java.util.function.Function<ResourceLocation, WeatherType> resolver,
+                             java.util.function.Function<WeatherType, Optional<ResourceLocation>> evolution) {
             if (steps <= 1) {
-                boolean changed = tick(random, cycleWeather, candidates, currentType);
+                boolean changed = tick(random, cycleWeather, candidates, currentType, evolution);
                 // 计时器每轮都会推进，必须置脏，否则卸载后进度会回退
                 return changed || cycleWeather;
             }
@@ -794,6 +952,7 @@ public final class WeatherData extends SavedData {
                 // 快进期间类型不会变化，直接用调用方解析好的能力位
                 boolean precipitates = currentType != null && currentType.hasPrecipitation();
                 float delta = 0.01F * steps;
+                this.ageTicks += steps;
                 float oldRain = this.rainLevel;
                 float oldThunder = this.thunderLevel;
                 this.rainLevel = Mth.clamp(this.rainLevel
@@ -804,8 +963,15 @@ public final class WeatherData extends SavedData {
                 return cycleWeather || oldRain != this.rainLevel || oldThunder != this.thunderLevel;
             }
             boolean changed = false;
+            ResourceLocation lastType = this.type;
             for (int step = 0; step < steps; step++) {
-                changed |= tick(random, cycleWeather, candidates, currentType);
+                changed |= tick(random, cycleWeather, candidates, currentType, evolution);
+                if (!lastType.equals(this.type)) {
+                    // 多步循环里天气池可能刚好翻到另一种类型：后续 tick 必须用新类型的能力位，
+                    // 否则雨量方向会按旧类型算错（最多 steps-1 个 tick）
+                    lastType = this.type;
+                    currentType = resolver.apply(lastType);
+                }
             }
             return changed || cycleWeather;
         }
@@ -816,6 +982,8 @@ public final class WeatherData extends SavedData {
             // 手动/API 设置会接管计时器；解除此前的强制/排除冻结状态
             this.frozen = false;
             this.forced = false;
+            this.ageTicks = 0L;
+            this.rampFactor = 1.0F;
             this.raining = raining;
             this.thundering = thundering && raining;
             if (!this.raining) {
@@ -849,7 +1017,9 @@ public final class WeatherData extends SavedData {
                 this.frozen = false;
                 this.clear(random);
                 changed = true;
-            } else if (cycleWeather) {
+            } else {
+                // 手动覆盖的时长是显式设置的，不应受 doWeatherCycle 影响：
+                // 关掉天气循环时 /weather rain 1d 也必须按时结束，而不是永久生效
                 this.manualTime -= steps;
                 changed = true;
                 if (this.manualTime <= 0) {
@@ -888,6 +1058,8 @@ public final class WeatherData extends SavedData {
             this.forced = true;
             this.manual = false;
             this.manualTime = 0;
+            this.ageTicks = 0L;
+            this.rampFactor = 1.0F;
             if (!this.frozen) {
                 this.frozen = true;
                 this.refreshTimers(random);
@@ -977,9 +1149,24 @@ public final class WeatherData extends SavedData {
             return this.type;
         }
 
+        /** 当前雨状态还有多少 tick 结束（晴天为下一个天气周期的剩余时间，已钳到 ≥0）。 */
+        public int rainTimeRemaining() {
+            return Math.max(0, this.rainTime);
+        }
+
+        /** 当前雷状态还有多少 tick 结束（已钳到 ≥0）。 */
+        public int thunderTimeRemaining() {
+            return Math.max(0, this.thunderTime);
+        }
+
         /** 是否处于指令/API 手动覆盖状态：名单只约束自然循环，不约束这些状态。 */
         public boolean isManual() {
             return this.manual;
+        }
+
+        /** 是否被配置里的「地形/群系强制天气」锁定（云图用）。 */
+        public boolean isForced() {
+            return this.forced;
         }
 
         /** 旧存档没有类型字段时，按布尔推导内置类型。 */
@@ -999,19 +1186,19 @@ public final class WeatherData extends SavedData {
         }
 
         public float rainLevel() {
-            return this.rainLevel;
+            return this.rainLevel * this.rampFactor;
         }
 
         public float thunderLevel() {
-            return this.thunderLevel;
+            return this.thunderLevel * this.rampFactor;
         }
 
         public boolean isRaining() {
-            return this.rainLevel > 0.2F;
+            return rainLevel() > 0.2F;
         }
 
         public boolean isThundering() {
-            return this.thunderLevel > 0.9F && this.isRaining();
+            return thunderLevel() > 0.9F && isRaining();
         }
 
         /**
@@ -1021,7 +1208,7 @@ public final class WeatherData extends SavedData {
          * 但类型仍然处于激活状态；客户端视觉层用这个值决定是否渲染类型自带的粒子/音效。</p>
          */
         public boolean isWeatherActive() {
-            return this.manual || this.raining || this.thundering;
+            return this.manual || this.forced || this.raining || this.thundering;
         }
 
         private static int range(RandomSource random, int min, int max) {

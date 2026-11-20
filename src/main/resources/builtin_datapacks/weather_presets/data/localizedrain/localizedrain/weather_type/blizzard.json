@@ -1,0 +1,28 @@
+{
+  "display_key": "weather.localizedrain.blizzard",
+  "has_precipitation": true,
+  "precipitation": "snow",
+  "allows_thunder": false,
+  "skylight": "required",
+  "particle": "minecraft:snowflake",
+  "sound": "minecraft:weather.rain",
+  "particle_count": 180,
+  "sound_interval_ticks": 30,
+  "visuals": {
+    "fog_color": "#cfd9e6",
+    "fog_near": 16,
+    "fog_far": 96,
+    "particle_motion": [0.45, -0.42, 0.16],
+    "sky_darken": 0.45,
+    "sky_color": "#c9d6e4",
+    "cloud_color": "#e2ebf5",
+    "sunrise_color": "#c8d4e0",
+    "star_brightness": 0.0,
+    "sun_visible": false,
+    "moon_visible": false
+  },
+  "effects": {
+    "damage": { "amount": 1.0, "interval_ticks": 40, "only_when_exposed": true, "type": "minecraft:freeze" },
+    "movement_speed": 0.92
+  }
+}

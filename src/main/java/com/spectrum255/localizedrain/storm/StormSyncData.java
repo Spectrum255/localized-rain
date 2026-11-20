@@ -18,6 +18,16 @@ public record StormSyncData(List<Entry> storms, String isolatedMode, double fall
                         float rain, float thunder,
                         boolean manual, boolean dying, int dyingTicksLeft) {}
 
-    /** HUD/视觉目标值：只在变化时发送。typeId/intensity 供客户端解析自定义天气的粒子与音效。 */
-    public record Hud(boolean raining, boolean thundering, String typeKey, String typeId, float intensity) {}
+    /**
+     * HUD/视觉目标值：只在变化时发送。
+     *
+     * <p>顶层 {@code typeKey/typeId/intensity} 是主导层（强度最大的那一层），供旧客户端字段语义与
+     * Xaero 单行回退使用；{@code layers} 是完整叠加层列表（移动模式最多
+     * {@code maxStackedWeatherTypes} 层，片模式恒为 0 或 1 层）。</p>
+     */
+    public record Hud(boolean raining, boolean thundering, String typeKey, String typeId, float intensity,
+                      List<HudLayer> layers) {}
+
+    /** 单层 HUD：typeKey 为空表示原版内置类型（与顶层语义一致），typeId 始终是真实 id。 */
+    public record HudLayer(String typeKey, String typeId, float intensity) {}
 }

@@ -25,10 +25,12 @@ import com.spectrum255.localizedrain.api.WindState;
 import com.spectrum255.localizedrain.storm.StormManager;
 import com.spectrum255.localizedrain.storm.WindField;
 import com.spectrum255.localizedrain.weather.BiomePatches;
+import com.spectrum255.localizedrain.weather.CompatWeatherQueries;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -56,8 +58,11 @@ public final class LocalizedWeatherCommand {
     private static final long MAX_AREA_SAMPLES = 512L;
     /** 单次 area 命令最多覆盖多少片群系范围。 */
     private static final long MAX_AREA_PATCHES = 64L;
-    /** 单次 area 命令最多触发多少次群系轮廓填充，避免命令卡住主线程。 */
-    private static final int MAX_AREA_FILLS = 8;
+    /**
+     * 单次 area 命令最多触发多少次群系轮廓填充。采样点上限是 512，旧值 8 会让未探索区域
+     * 在两三个采样点后就报「预算不足」；放宽到 64，并按实际采样点数取小。
+     */
+    private static final int MAX_AREA_FILLS = 64;
     private static final Dynamic2CommandExceptionType AREA_TOO_LARGE = new Dynamic2CommandExceptionType(
             (samples, maximum) -> Component.translatable("commands.localizedrain.weather.area.too_large", samples, maximum));
     private static final Dynamic2CommandExceptionType AREA_TOO_MANY_PATCHES = new Dynamic2CommandExceptionType(
@@ -104,6 +109,7 @@ public final class LocalizedWeatherCommand {
                         .then(Commands.argument("mode", StringArgumentType.word())
                                 .suggests(MODE_SUGGESTIONS)
                                 .executes(LocalizedWeatherCommand::setMode)))
+                .then(Commands.literal("compat").executes(LocalizedWeatherCommand::compatReport))
                 .then(stormCommand()));
     }
 
@@ -113,7 +119,7 @@ public final class LocalizedWeatherCommand {
         WeatherMode mode = WeatherMode.strictParse(raw)
                 .orElseThrow(() -> INVALID_MODE.create(raw));
         ServerLevel level = context.getSource().getLevel();
-        ConfigFiles.writeWeatherMode(level, mode);
+        boolean persisted = ConfigFiles.writeWeatherMode(level, mode);
         WeatherMode.apply(mode);
         // 立刻重推风暴快照，客户端在下一 tick 之前就知道模式已变
         StormManager.refreshAll(level.getServer());
@@ -122,7 +128,51 @@ public final class LocalizedWeatherCommand {
         context.getSource().sendSuccess(() -> Component.translatable(
                 "commands.localizedrain.mode.set",
                 Component.translatable("localizedrain.configuration.weatherMode." + mode.name())), true);
+        if (!persisted) {
+            // 运行时已生效，但没写进 weather.toml：重启后会回退，必须明确告诉管理员
+            context.getSource().sendFailure(Component.translatable("commands.localizedrain.mode.not_persisted"));
+        }
         return 1;
+    }
+
+    /**
+     * `/weather compat`：打印当前模式与兼容代理的实际取值，便于确认第三方模组为什么看不到天气。
+     * 返回本地雨量的百分比（0–100），方便在命令方块/函数里做简单判断。
+     */
+    private static int compatReport(CommandContext<CommandSourceStack> context) {
+        ServerLevel level = context.getSource().getLevel();
+        WeatherMode mode = WeatherMode.current();
+        // 与代理实际取值口径一致（代理读的是缓存值，热改配置后最多约 1 秒才刷新）
+        boolean enabled = CompatWeatherQueries.serverEnabled();
+        float localRain = WeatherManager.localRainLevel(level);
+        float localThunder = WeatherManager.localThunderLevel(level);
+        float proxyRain = CompatWeatherQueries.localRainLevel(level);
+        float proxyThunder = CompatWeatherQueries.localThunderLevel(level);
+        BlockPos pos = BlockPos.containing(context.getSource().getPosition());
+        float posRain = WeatherManager.rainLevelAt(level, pos);
+        float posThunder = WeatherManager.thunderLevelAt(level, pos);
+        String message = String.format(
+                Locale.ROOT,
+                "mode=%s compatVanillaWeatherQueries=%s localRain=%.3f localThunder=%.3f"
+                        + " | getRainLevel=%.3f getThunderLevel=%.3f isRaining=%s isThundering=%s"
+                        + " | at=%s posRain=%.3f posThunder=%.3f scopeDepth=%d"
+                        + " | proxyRain=%.3f proxyThunder=%.3f",
+                mode.getSerializedName(),
+                enabled,
+                localRain,
+                localThunder,
+                level.getRainLevel(1.0F),
+                level.getThunderLevel(1.0F),
+                level.isRaining(),
+                level.isThundering(),
+                pos.toShortString(),
+                posRain,
+                posThunder,
+                CompatWeatherQueries.depth(),
+                proxyRain,
+                proxyThunder);
+        context.getSource().sendSuccess(() -> Component.literal(message), false);
+        return (int) Math.round(localRain * 100.0F);
     }
 
     /** `/weather storm` 子树：移动模式下手动生成、改写与移除风暴的所有入口。 */
@@ -273,12 +323,13 @@ public final class LocalizedWeatherCommand {
         }
 
         Set<String> patches = new LinkedHashSet<>();
-        BiomePatches.FillBudget budget = new BiomePatches.FillBudget(MAX_AREA_FILLS);
+        int fillBudget = (int) Math.min(samples, MAX_AREA_FILLS);
+        BiomePatches.FillBudget budget = new BiomePatches.FillBudget(fillBudget);
         for (int cellX = minCellX; cellX <= maxCellX; cellX += AREA_STEP) {
             for (int cellZ = minCellZ; cellZ <= maxCellZ; cellZ += AREA_STEP) {
                 String patch = BiomePatches.patchAtQuart(level, cellX, cellZ, budget);
                 if (patch == null) {
-                    throw AREA_BUDGET.create(MAX_AREA_FILLS);
+                    throw AREA_BUDGET.create(fillBudget);
                 }
                 patches.add(patch);
                 if (patches.size() > MAX_AREA_PATCHES) {
@@ -395,7 +446,10 @@ public final class LocalizedWeatherCommand {
             source.sendFailure(Component.translatable("commands.localizedrain.weather.biome_excluded", patches.size()));
             return 0;
         }
-        WeatherManager.setWeather(level, allowed, typeId, duration);
+        if (!WeatherManager.setWeather(level, allowed, typeId, duration)) {
+            source.sendFailure(Component.translatable("commands.localizedrain.weather.unknown_type", typeId.toString()));
+            return 0;
+        }
         int count = allowed.size();
         Component message = successMessage(typeId, count);
         if (skipped > 0) {
@@ -439,6 +493,9 @@ public final class LocalizedWeatherCommand {
     }
 
     private static int listStorms(CommandContext<CommandSourceStack> context) {
+        if (!requireMobile(context)) {
+            return 0;
+        }
         ServerLevel level = context.getSource().getLevel();
         List<StormSnapshot> storms = StormManager.snapshots(level);
         if (storms.isEmpty()) {
@@ -476,9 +533,24 @@ public final class LocalizedWeatherCommand {
         }
     }
 
+    /**
+     * 风暴子命令只在移动模式（storm 系统开启）下有意义。片/原版模式里它们原本会直接返回、
+     * 命令却回复成功，表现为「提示生成了风暴但什么也没发生」；这里统一给出明确失败。
+     */
+    private static boolean requireMobile(CommandContext<CommandSourceStack> context) {
+        if (WeatherManager.mobileMode()) {
+            return true;
+        }
+        context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.mobile_only"));
+        return false;
+    }
+
     /** 档案不存在 / 生成被事件取消时发送失败提示，成功返回快照。 */
     private static StormSnapshot spawnChecked(CommandContext<CommandSourceStack> context,
                                               ResourceLocation profileId, StormSpawnSpec.Builder builder) {
+        if (!requireMobile(context)) {
+            return null;
+        }
         ServerLevel level = context.getSource().getLevel();
         StormProfile profile = StormManager.profile(level, profileId);
         if (profile == null) {
@@ -566,8 +638,8 @@ public final class LocalizedWeatherCommand {
                 Math.max(from.getY(), to.getY()) + 0.5D,
                 (from.getZ() + to.getZ()) / 2.0D + 0.5D);
         double horizontal = Math.hypot((double) from.getX() - to.getX(), (double) from.getZ() - to.getZ());
-        // 区域风暴半径 = 矩形半对角线 + 64 格缓冲
-        double radius = horizontal / 2.0D + 64.0D;
+        // 区域风暴半径 = 矩形半对角线 + 64 格缓冲，封顶到合法风暴半径
+        double radius = Math.min(horizontal / 2.0D + 64.0D, 4096.0D);
         StormSpawnSpec.Builder builder = StormSpawnSpec.builder(profileId, center)
                 .radius(radius)
                 .manual(true);
@@ -603,12 +675,7 @@ public final class LocalizedWeatherCommand {
         }
         // 不指定半径时交给档案自身的 radius 区间（例如 cave_rain 的 48–96）
         double actualRadius = Double.isNaN(radius) ? 0.0D : radius;
-        int cap = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);
-        int existing = StormManager.manualStormCount(level);
-        int players = level.players().size();
-        if (existing + players > cap) {
-            context.getSource().sendFailure(Component.translatable(
-                    "commands.localizedrain.storm.manual_limit", existing, cap));
+        if (!requireMobile(context)) {
             return 0;
         }
         int spawned = 0;
@@ -631,6 +698,14 @@ public final class LocalizedWeatherCommand {
             }
         }
         if (spawned == 0) {
+            int cap = WindField.intConfig(Config.MAX_MANUAL_STORMS_PER_DIMENSION, 16);
+            int existing = StormManager.manualStormCount(level);
+            if (existing >= cap) {
+                // 逐玩家生成时撞到手动上限：给出上限提示而不是笼统的「生成失败」
+                context.getSource().sendFailure(Component.translatable(
+                        "commands.localizedrain.storm.manual_limit", existing, cap));
+                return 0;
+            }
             context.getSource().sendFailure(Component.translatable(
                     "commands.localizedrain.storm.spawn_failed", profileId.toString()));
             return 0;
@@ -643,6 +718,9 @@ public final class LocalizedWeatherCommand {
     }
 
     private static int setStormStage(CommandContext<CommandSourceStack> context) {
+        if (!requireMobile(context)) {
+            return 0;
+        }
         ServerLevel level = context.getSource().getLevel();
         String argument = StringArgumentType.getString(context, "id");
         UUID id = parseId(context, argument);
@@ -670,6 +748,9 @@ public final class LocalizedWeatherCommand {
     }
 
     private static int advanceStorm(CommandContext<CommandSourceStack> context) {
+        if (!requireMobile(context)) {
+            return 0;
+        }
         ServerLevel level = context.getSource().getLevel();
         String argument = StringArgumentType.getString(context, "id");
         UUID id = parseId(context, argument);
@@ -693,6 +774,9 @@ public final class LocalizedWeatherCommand {
     }
 
     private static int setStormIntensity(CommandContext<CommandSourceStack> context) {
+        if (!requireMobile(context)) {
+            return 0;
+        }
         ServerLevel level = context.getSource().getLevel();
         String argument = StringArgumentType.getString(context, "id");
         UUID id = parseId(context, argument);
@@ -718,12 +802,25 @@ public final class LocalizedWeatherCommand {
             context.getSource().sendFailure(Component.translatable("commands.localizedrain.storm.wind_failed"));
             return 0;
         }
+        // 单位是方块/tick；与 WindField/StormManager 共用同一个硬上限，避免把风暴推出世界
+        double speed = Math.hypot(x, z);
+        if (speed > WindField.MAX_SPEED) {
+            double scale = WindField.MAX_SPEED / speed;
+            x *= scale;
+            z *= scale;
+        }
         StormManager.setWind(level, x, z);
-        context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.wind_set", x, z), true);
+        double appliedX = x;
+        double appliedZ = z;
+        context.getSource().sendSuccess(
+                () -> Component.translatable("commands.localizedrain.storm.wind_set", appliedX, appliedZ), true);
         return 1;
     }
 
     private static int removeStorm(CommandContext<CommandSourceStack> context) {
+        if (!requireMobile(context)) {
+            return 0;
+        }
         ServerLevel level = context.getSource().getLevel();
         String argument = StringArgumentType.getString(context, "id");
         UUID id = parseId(context, argument);
@@ -738,6 +835,9 @@ public final class LocalizedWeatherCommand {
     }
 
     private static int removeAllStorms(CommandContext<CommandSourceStack> context) {
+        if (!requireMobile(context)) {
+            return 0;
+        }
         ServerLevel level = context.getSource().getLevel();
         int total = StormManager.removeWhere(level, snapshot -> true);
         context.getSource().sendSuccess(() -> Component.translatable("commands.localizedrain.storm.removed_all", total), true);

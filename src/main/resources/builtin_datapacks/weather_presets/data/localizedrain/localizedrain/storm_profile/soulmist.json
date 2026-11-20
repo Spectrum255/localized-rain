@@ -1,0 +1,20 @@
+{
+  "weight": 8,
+  "natural": true,
+  "speed_multiplier": 0.4,
+  "radius": [130, 240],
+  "vertical": "column",
+  "skylight": "forbidden",
+  "dimensions": ["minecraft:the_nether"],
+  "stages": [
+    {
+      "type": "localizedrain:soulmist",
+      "min_ticks": 6000,
+      "max_ticks": 12000,
+      "rain": [0.0, 0.0],
+      "thunder": [0.0, 0.0],
+      "radius_scale": [0.9, 1.0]
+    }
+  ],
+  "environment": { "stage_speed_from_moisture": false, "moisture_gain": 0.0, "moisture_decay": 0.002 }
+}

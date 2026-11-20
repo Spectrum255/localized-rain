@@ -1,0 +1,17 @@
+{
+  "display_key": "weather.localizedrain.overcast",
+  "has_precipitation": false,
+  "precipitation": "none",
+  "allows_thunder": false,
+  "skylight": "required",
+  "sound_interval_ticks": 0,
+  "visuals": {
+    "sky_darken": 0.4,
+    "sky_color": "#9aa3ad",
+    "cloud_color": "#7d8792",
+    "sunrise_color": "#a08d80",
+    "star_brightness": 0.0,
+    "sun_visible": false,
+    "moon_visible": false
+  }
+}

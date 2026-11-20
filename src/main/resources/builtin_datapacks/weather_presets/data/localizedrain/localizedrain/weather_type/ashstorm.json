@@ -1,0 +1,28 @@
+{
+  "display_key": "weather.localizedrain.ashstorm",
+  "has_precipitation": false,
+  "precipitation": "none",
+  "allows_thunder": false,
+  "skylight": "forbidden",
+  "particle": "minecraft:ash",
+  "sound": "minecraft:block.soul_sand.break",
+  "particle_count": 150,
+  "sound_interval_ticks": 40,
+  "visuals": {
+    "fog_color": "#4a4a4a",
+    "fog_near": 16,
+    "fog_far": 96,
+    "particle_motion": [0.5, -0.03, 0.15],
+    "sky_darken": 0.6,
+    "sky_color": "#4a4a4a",
+    "cloud_color": "#5c4c46",
+    "sunrise_color": "#8a3a1a",
+    "star_brightness": 0.05,
+    "sun_visible": false,
+    "moon_visible": false
+  },
+  "effects": {
+    "damage": { "amount": 1.0, "interval_ticks": 40, "only_when_exposed": true },
+    "movement_speed": 0.95
+  }
+}

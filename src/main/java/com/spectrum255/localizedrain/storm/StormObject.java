@@ -4,11 +4,13 @@ import com.spectrum255.localizedrain.api.StormProfile;
 import com.spectrum255.localizedrain.api.StormProfiles;
 import com.spectrum255.localizedrain.api.StormSnapshot;
 import com.spectrum255.localizedrain.api.WeatherType;
+import com.spectrum255.localizedrain.api.event.StormDyingEvent;
 import java.util.UUID;
 import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
 
 /** 单个风暴：水平圆 + 竖直区间，无三维体积。 */
 final class StormObject {
@@ -52,6 +54,26 @@ final class StormObject {
     boolean manual;
     boolean dying;
     int dyingTicksLeft;
+    /** 本 tick 请求进入淡出，由 StormManager 先发 StormDyingEvent 再决定是否真的开始。 */
+    boolean pendingDying;
+    /** pendingDying 的来源，便于事件携带正确 cause。 */
+    StormDyingEvent.Cause pendingDyingCause;
+    /** StormDyingEvent 被取消后的免疫期：期间不再重复请求淡出，避免每 tick 刷事件。 */
+    long dyingBlockedUntil;
+    /**
+     * 分裂后的合并免疫到期时间（gameTime）。父子风暴在分裂瞬间距离很近，
+     * 若不设免疫，下一次合并检查就会把它们重新合成一个，等于分裂无效。
+     */
+    long mergeImmuneUntil;
+
+    /** 地形采样结果：雨/雷/速度修正与中心地表高度；由 StormTerrain 写入，读档后默认 1.0。 */
+    float terrainRainFactor = 1.0F;
+    float terrainThunderFactor = 1.0F;
+    double terrainSpeedFactor = 1.0D;
+    int terrainSurfaceY = Integer.MIN_VALUE;
+    /** 地形绕行角（弧度）：由 {@code StormTerrain} 按前方地表抬升计算，正负决定绕向。 */
+    double terrainSteer;
+    long terrainSampledAt;
     /** 手动风暴的剩余寿命；-1 = 不限制（按档案阶段推进）。 */
     int lifeTicksLeft = -1;
     /** 连续远离所有玩家多少 tick；用于「远离后淡出」。 */
@@ -67,6 +89,18 @@ final class StormObject {
     int lastTransitionFrom = -1;
 
     private StormObject() {}
+
+    /**
+     * 风暴速度的绝对上限（格/tick），与风场 {@code windInitialSpeed} 的上限 200 格/秒一致。
+     * 超过 10 格/tick 的风暴每 tick 跨过 0.6 个区块，距离回收、覆盖判定与客户端插值都会失真；
+     * 更极端的值（1e9）还会让手动风暴永远回收不掉、白占维度名额。所有速度写入入口共用本钳制。
+     */
+    static final double MAX_VELOCITY = 10.0D;
+
+    /** 非有限值归零，并按 {@link #MAX_VELOCITY} 收敛；分裂/合并/读档/API 都必须经过它。 */
+    static double clampVelocity(double value) {
+        return Mth.clamp(Double.isFinite(value) ? value : 0.0D, -MAX_VELOCITY, MAX_VELOCITY);
+    }
 
     static StormObject create(UUID id, ResourceLocation profileId, double x, double z, double radius,
                               double minY, double maxY, StormProfile.VerticalMode verticalMode,
@@ -91,9 +125,8 @@ final class StormObject {
     /** 解析并缓存档案；数据包重载或服务器停止时由 StormManager 清空。未知档案只解析一次，避免每 tick 回源。 */
     StormProfile resolveProfile(ServerLevel level) {
         if (!this.profileResolved) {
-            this.cachedProfile = StormProfiles.byId(level, this.profileId)
-                    .map(Holder.Reference::value)
-                    .orElse(null);
+            this.cachedProfile = this.profileId == null ? null
+                    : StormProfiles.byId(level, this.profileId).map(Holder.Reference::value).orElse(null);
             this.profileResolved = true;
         }
         return this.cachedProfile;
@@ -116,6 +149,8 @@ final class StormObject {
     public boolean manual() { return this.manual; }
     public boolean dying() { return this.dying; }
     public int stageIndex() { return this.stageIndex; }
+    /** 当前阶段还剩多少 tick（负数表示阶段已到期、等待下一次 tick 推进）。 */
+    public double stageTicksLeft() { return this.stageTicksLeft; }
     public float rainIntensity() { return this.rainIntensity; }
     public float thunderIntensity() { return this.thunderIntensity; }
     public double radius() { return this.radius; }
@@ -141,12 +176,12 @@ final class StormObject {
     /** 未乘淡出系数的强度：同步给客户端后由客户端按剩余淡出 tick 自行平滑。 */
     public float baseRain() {
         float value = this.rainOverride != null ? this.rainOverride : this.rainIntensity;
-        return this.precipitationCapability ? value : 0.0F;
+        return this.precipitationCapability ? value * this.terrainRainFactor : 0.0F;
     }
 
     public float baseThunder() {
         float value = this.thunderOverride != null ? this.thunderOverride : this.thunderIntensity;
-        return this.thunderCapability ? value : 0.0F;
+        return this.thunderCapability ? value * this.terrainThunderFactor : 0.0F;
     }
 
     /** 按天气类型的能力位统一钳制强度；类型变化、阶段切换、读档后都走这里。 */
@@ -180,20 +215,30 @@ final class StormObject {
                 && py >= this.minY && py <= this.maxY;
     }
 
-    /** 推进一次：移动、阶段计时、强度趋近、消亡倒计时。 */
-    void tick(StormProfile profile, WindField wind, double speedFactor) {
+    /** 推进一次：移动、阶段计时、强度趋近、消亡倒计时。{@code next} 由调用方按分支演化选好。 */
+    void tick(StormProfile profile, WindField wind, double speedFactor, StormEvolution.Next next) {
         if (this.dying) {
             this.dyingTicksLeft--;
             return;
         }
         if (this.lifeTicksLeft > 0 && --this.lifeTicksLeft == 0) {
-            // 手动风暴的寿命由生成参数决定，到期直接进入淡出
-            this.startDying();
+            // 手动风暴的寿命由生成参数决定；是否真的淡出交给 StormManager 发 StormDyingEvent 决定
+            this.pendingDying = true;
+            this.pendingDyingCause = StormDyingEvent.Cause.LIFETIME;
             return;
         }
         if (!this.pinnedVelocity) {
-            this.velocityX = wind.velocityX() * profile.speedMultiplier();
-            this.velocityZ = wind.velocityZ() * profile.speedMultiplier();
+            this.velocityX = wind.velocityX() * profile.speedMultiplier() * this.terrainSpeedFactor;
+            this.velocityZ = wind.velocityZ() * profile.speedMultiplier() * this.terrainSpeedFactor;
+            // 前方地形抬升时按 terrainSteer 侧转，避免风暴一头撞进山体后原地打转
+            if (this.terrainSteer != 0.0D) {
+                double cos = Math.cos(this.terrainSteer);
+                double sin = Math.sin(this.terrainSteer);
+                double vx = this.velocityX * cos - this.velocityZ * sin;
+                double vz = this.velocityX * sin + this.velocityZ * cos;
+                this.velocityX = vx;
+                this.velocityZ = vz;
+            }
         }
         this.x += this.velocityX;
         this.z += this.velocityZ;
@@ -210,17 +255,28 @@ final class StormObject {
         if (this.stageTicksLeft > 0.0D) {
             return;
         }
-        if (this.stageIndex + 1 < profile.stages().size()) {
-            this.enterStage(profile, this.stageIndex + 1, stage);
+        if (next != null && next.stage() >= 0) {
+            this.enterStage(profile, next.stage(), stage, next.type());
         } else {
-            this.startDying();
+            this.pendingDying = true;
+            this.pendingDyingCause = StormDyingEvent.Cause.STAGE_END;
         }
     }
 
     void enterStage(StormProfile profile, int index, StormProfile.Stage from) {
+        this.enterStage(profile, index, from, null);
+    }
+
+    /** 进入新阶段；{@code transitionType} 非空时覆盖该阶段的天气类型（分支演化用）。 */
+    void enterStage(StormProfile profile, int index, StormProfile.Stage from, ResourceLocation transitionType) {
+        if (transitionType != null) {
+            this.typeOverride = transitionType;
+        }
+        // 与 load() 的 Math.max(0, ...) 对齐：公开 API / 数据包可能给出负数或越界阶段
+        int clamped = Mth.clamp(index, 0, Math.max(0, profile.stages().size() - 1));
         this.lastTransitionFrom = this.stageIndex;
-        this.stageIndex = index;
-        StormProfile.Stage next = profile.stage(index);
+        this.stageIndex = clamped;
+        StormProfile.Stage next = profile.stage(clamped);
         this.stageTicksTotal = this.stageTicksLeft = pickTicks(this.seed, next);
         this.stageScale = next.radiusScale();
         this.rainIntensity = next.rain().lerp(0.0F);
@@ -295,6 +351,7 @@ final class StormObject {
         tag.putInt("far_ticks", this.farTicks);
         tag.putLong("spawn", this.spawnGameTime);
         tag.putLong("seed", this.seed);
+        tag.putLong("merge_immune_until", this.mergeImmuneUntil);
         return tag;
     }
 
@@ -309,31 +366,43 @@ final class StormObject {
                 storm.verticalMode = mode;
             }
         }
-        storm.minY = tag.getDouble("min_y");
-        storm.maxY = tag.getDouble("max_y");
-        storm.x = tag.getDouble("x");
-        storm.z = tag.getDouble("z");
-        storm.radius = tag.getDouble("radius");
-        storm.velocityX = tag.getDouble("vx");
-        storm.velocityZ = tag.getDouble("vz");
+        // 存档可能被手改或旧版本写坏：NaN/Inf 会传染坐标、距离回收与客户端雨量，统一钳到安全值
+        storm.x = finiteOr(tag.getDouble("x"), 0.0D);
+        storm.z = finiteOr(tag.getDouble("z"), 0.0D);
+        storm.minY = finiteOr(tag.getDouble("min_y"), 0.0D);
+        storm.maxY = Math.max(storm.minY, finiteOr(tag.getDouble("max_y"), storm.minY));
+        storm.radius = Mth.clamp(finiteOr(tag.getDouble("radius"), 16.0D), 1.0D, 4096.0D);
+        storm.velocityX = clampVelocity(tag.getDouble("vx"));
+        storm.velocityZ = clampVelocity(tag.getDouble("vz"));
         storm.pinnedVelocity = tag.getBoolean("pinned");
         storm.radiusExplicit = tag.getBoolean("radius_explicit");
-        storm.stageIndex = tag.getInt("stage");
-        storm.stageTicksLeft = tag.getDouble("stage_left");
-        storm.stageTicksTotal = tag.getDouble("stage_total");
-        storm.rainIntensity = tag.getFloat("rain");
-        storm.thunderIntensity = tag.getFloat("thunder");
-        storm.temperature = tag.getFloat("temperature");
-        storm.moisture = tag.getFloat("moisture");
-        storm.rainOverride = tag.contains("rain_override") ? tag.getFloat("rain_override") : null;
-        storm.thunderOverride = tag.contains("thunder_override") ? tag.getFloat("thunder_override") : null;
+        storm.stageIndex = Math.max(0, tag.getInt("stage"));
+        storm.stageTicksLeft = Math.max(0.0D, finiteOr(tag.getDouble("stage_left"), 0.0D));
+        storm.stageTicksTotal = Math.max(0.0D, finiteOr(tag.getDouble("stage_total"), 0.0D));
+        storm.rainIntensity = Mth.clamp(finiteOr(tag.getFloat("rain"), 0.0F), 0.0F, 1.0F);
+        storm.thunderIntensity = Mth.clamp(finiteOr(tag.getFloat("thunder"), 0.0F), 0.0F, 1.0F);
+        storm.temperature = Mth.clamp(finiteOr(tag.getFloat("temperature"), 0.5F), 0.0F, 1.0F);
+        storm.moisture = Mth.clamp(finiteOr(tag.getFloat("moisture"), 0.5F), 0.0F, 1.0F);
+        storm.rainOverride = tag.contains("rain_override")
+                ? Mth.clamp(finiteOr(tag.getFloat("rain_override"), 0.0F), 0.0F, 1.0F) : null;
+        storm.thunderOverride = tag.contains("thunder_override")
+                ? Mth.clamp(finiteOr(tag.getFloat("thunder_override"), 0.0F), 0.0F, 1.0F) : null;
         storm.manual = tag.getBoolean("manual");
         storm.dying = tag.getBoolean("dying");
-        storm.dyingTicksLeft = tag.getInt("dying_left");
+        storm.dyingTicksLeft = Math.max(0, tag.getInt("dying_left"));
         storm.lifeTicksLeft = tag.contains("life_left") ? tag.getInt("life_left") : -1;
-        storm.farTicks = tag.getInt("far_ticks");
+        storm.farTicks = Math.max(0, tag.getInt("far_ticks"));
         storm.spawnGameTime = tag.getLong("spawn");
         storm.seed = tag.getLong("seed");
+        storm.mergeImmuneUntil = tag.getLong("merge_immune_until");
         return storm;
+    }
+
+    private static double finiteOr(double value, double fallback) {
+        return Double.isFinite(value) ? value : fallback;
+    }
+
+    private static float finiteOr(float value, float fallback) {
+        return Float.isFinite(value) ? value : fallback;
     }
 }

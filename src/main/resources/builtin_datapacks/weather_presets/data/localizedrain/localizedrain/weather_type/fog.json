@@ -1,0 +1,20 @@
+{
+  "display_key": "weather.localizedrain.fog",
+  "has_precipitation": false,
+  "precipitation": "none",
+  "allows_thunder": false,
+  "skylight": "required",
+  "sound_interval_ticks": 0,
+  "visuals": {
+    "fog_color": "#b0b4b8",
+    "fog_near": 4,
+    "fog_far": 40,
+    "sky_darken": 0.25,
+    "sky_color": "#b0b4b8",
+    "cloud_color": "#c6cacd",
+    "sunrise_color": "#b8b0a8",
+    "star_brightness": 0.15,
+    "sun_visible": false,
+    "moon_visible": false
+  }
+}

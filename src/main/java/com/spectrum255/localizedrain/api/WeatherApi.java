@@ -2,6 +2,7 @@ package com.spectrum255.localizedrain.api;
 
 import com.spectrum255.localizedrain.storm.StormManager;
 import com.spectrum255.localizedrain.weather.WeatherBiomeFilter;
+import com.spectrum255.localizedrain.weather.WeatherLayer;
 import com.spectrum255.localizedrain.weather.WeatherManager;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -66,6 +67,36 @@ public final class WeatherApi {
         return WeatherManager.thunderLevelAt(level, pos);
     }
 
+    /**
+     * 该位置的雨量（0–1）。
+     *
+     * <p>不做见天/遮挡判断，直接返回该位置所属片/风暴的降水强度：片模式读天气状态，
+     * 移动模式读主导风暴的雨量，原版模式读原版值。适合按雨量计算容器集水、作物生长等。</p>
+     */
+    public static float rainLevelAt(ServerLevel level, BlockPos pos) {
+        return WeatherManager.rainLevelAt(level, pos);
+    }
+
+    /**
+     * 在已知位置执行一段逻辑：期间原版无坐标接口（{@code getRainLevel/getThunderLevel/isRaining/
+     * isThundering}）会按这个位置解析，而不是维度级近似。
+     *
+     * <p>供需要在一个已知坐标的处理流程里读取天气的附属模组使用；服务端才有效，
+     * 且受 {@code compatVanillaWeatherQueries} 开关控制。方块随机刻/计划刻、方块实体、实体 tick、
+     * 降水刻与区块 tick 已经由本模组自动包裹，通常不需要手动调用。</p>
+     *
+     * <p><b>线程约束</b>：只能在服务端主线程调用。其他线程调用会忽略位置作用域并记录一次告警，
+     * 期间的无坐标查询回退到维度最大值（本模组的位置/片缓存不是线程安全的）。</p>
+     */
+    public static void withPosition(ServerLevel level, BlockPos pos, Runnable action) {
+        com.spectrum255.localizedrain.weather.CompatWeatherQueries.runAt(level, pos, action);
+    }
+
+    /** 同 {@link #withPosition(ServerLevel, BlockPos, Runnable)}，有返回值。 */
+    public static <T> T withPosition(ServerLevel level, BlockPos pos, java.util.function.Supplier<T> action) {
+        return com.spectrum255.localizedrain.weather.CompatWeatherQueries.runAt(level, pos, action);
+    }
+
     /** 该位置的天空变暗值（0–11），已按局部天气计算。 */
     public static int skyDarkenAt(ServerLevel level, BlockPos pos) {
         return WeatherManager.skyDarkenAt(level, pos);
@@ -75,6 +106,103 @@ public final class WeatherApi {
     public static Set<String> patches(ServerLevel level) {
         return WeatherManager.allPatches(level);
     }
+
+    /**
+     * 该位置当前的天气层，按展示强度降序。
+     *
+     * <p>移动模式按兼容规则返回叠加的各层；片模式返回单层；原版模式把原版雨/雷合成一层。
+     * 与原版 {@code WeatherLayer} 不同，这里只暴露只读视图，供附属模组绘制 HUD 或处理逻辑。</p>
+     */
+    public static List<WeatherLayerView> layersAt(ServerLevel level, BlockPos pos) {
+        if (level == null || pos == null) {
+            return List.of();
+        }
+        return switch (WeatherMode.current()) {
+            case MOBILE -> {
+                List<WeatherLayerView> result = new ArrayList<>();
+                for (WeatherLayer layer : StormManager.layersAt(level, pos)) {
+                    result.add(WeatherLayerView.of(layer));
+                }
+                yield List.copyOf(result);
+            }
+            case PATCHES -> {
+                ResourceLocation id = WeatherManager.weatherTypeIdAt(level, pos);
+                float rain = WeatherManager.rainLevelAt(level, pos);
+                float thunder = WeatherManager.thunderLevelAt(level, pos);
+                yield List.of(new WeatherLayerView(id, WeatherTypes.byId(level, id), rain, thunder, rain,
+                        WeatherManager.isRainingAt(level, pos), true));
+            }
+            case VANILLA -> {
+                float rain = level.getRainLevel(1.0F);
+                float thunder = Math.min(level.getThunderLevel(1.0F), rain);
+                ResourceLocation id = level.isThundering() ? WeatherTypes.THUNDER_ID
+                        : level.isRaining() ? WeatherTypes.RAIN_ID : WeatherTypes.CLEAR_ID;
+                yield List.of(new WeatherLayerView(id, WeatherTypes.byId(level, id), rain, thunder, rain,
+                        level.isRaining() && level.canSeeSky(pos), true));
+            }
+        };
+    }
+
+    /**
+     * 未来 {@code horizonTicks} 内可预期的天气变化（近似预报），按时间升序。
+     *
+     * <p>片模式按天气类型 {@code next} 里权重最高的条目预测下一类型（不做温湿度过滤）；
+     * 移动模式按风暴阶段边界预测下一阶段类型；原版模式与无天气的位置返回空列表。</p>
+     */
+    public static List<ForecastStep> forecast(ServerLevel level, BlockPos pos, int horizonTicks) {
+        return WeatherManager.forecastAt(level, pos, horizonTicks);
+    }
+
+    /**
+     * 以 {@code center} 为中心、{@code radius} 方块为半径的天气快照（16 方块步长），供云图/世界地图自绘。
+     *
+     * <p>只返回非晴天格；查询走现有的片/层缓存，但半径较大时仍可能触发列扫描，
+     * 建议在 GUI 打开时每秒调用一次，不要每 tick 调用。</p>
+     */
+    public static List<MapCell> mapSnapshot(ServerLevel level, BlockPos center, int radius) {
+        if (level == null || center == null) {
+            return List.of();
+        }
+        int limit = Math.max(16, Math.min(radius, 512));
+        List<MapCell> cells = new ArrayList<>();
+        for (int dx = -limit; dx <= limit; dx += 16) {
+            for (int dz = -limit; dz <= limit; dz += 16) {
+                BlockPos pos = center.offset(dx, 0, dz);
+                List<WeatherLayerView> layers = layersAt(level, pos);
+                if (layers.isEmpty()) {
+                    continue;
+                }
+                WeatherLayerView top = layers.get(0);
+                if (WeatherTypes.CLEAR_ID.equals(top.typeId()) && top.intensity() <= 0.01F) {
+                    continue;
+                }
+                cells.add(new MapCell(pos.getX(), pos.getZ(), top.typeId(), top.rain(), top.thunder(),
+                        top.intensity()));
+            }
+        }
+        return List.copyOf(cells);
+    }
+
+    /** 天气层只读视图。 */
+    public record WeatherLayerView(ResourceLocation typeId, WeatherType type, float rain, float thunder,
+                                   float intensity, boolean canPrecipitateHere, boolean affectsPlayers) {
+        static WeatherLayerView of(WeatherLayer layer) {
+            return new WeatherLayerView(layer.typeId(), layer.type(), layer.rain(), layer.thunder(),
+                    layer.intensity(), layer.canPrecipitateHere(), layer.affectsPlayers());
+        }
+    }
+
+    /**
+     * 预报的一步。
+     *
+     * @param inTicks   距离这次变化的 tick 数（0 表示立刻）
+     * @param typeId    变化后的天气类型 id（晴天为 {@code localizedrain:clear}）
+     * @param intensity 变化后的降水强度（0 表示无降水）
+     */
+    public record ForecastStep(int inTicks, ResourceLocation typeId, float intensity) {}
+
+    /** 云图格：位置、主导天气类型与该格的雨/雷/强度。 */
+    public record MapCell(int x, int z, ResourceLocation typeId, float rain, float thunder, float intensity) {}
 
     /**
      * 把一批群系片的天气设为指定类型；duration 为 tick 数，{@code < 0} 表示使用该类型的随机区间。
@@ -116,8 +244,8 @@ public final class WeatherApi {
         if (patch == null) {
             return false;
         }
-        WeatherManager.setWeather(level, List.of(patch), typeId, duration);
-        return true;
+        // 未注册类型由 WeatherManager 拒绝（不再静默回落成晴天）
+        return WeatherManager.setWeather(level, List.of(patch), typeId, duration);
     }
 
     // ---- 移动天气：查询 ----

@@ -1,0 +1,24 @@
+{
+  "display_key": "weather.localizedrain.voidhaze",
+  "has_precipitation": false,
+  "precipitation": "none",
+  "allows_thunder": false,
+  "skylight": "forbidden",
+  "particle": "minecraft:portal",
+  "particle_count": 50,
+  "sound_interval_ticks": 0,
+  "visuals": {
+    "fog_color": "#1d1a2b",
+    "fog_near": 20,
+    "fog_far": 112,
+    "particle_motion": [0.02, 0.01, 0.02],
+    "sky_darken": 0.35,
+    "sky_color": "#1d1a2b",
+    "cloud_color": "#2d2a3b",
+    "sunrise_color": "#4a3a6a",
+    "star_brightness": 0.45,
+    "sun_visible": false,
+    "moon_visible": false
+  },
+  "effects": { "movement_speed": 0.9 }
+}

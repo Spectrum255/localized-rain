@@ -10,13 +10,15 @@ import net.minecraft.util.Mth;
 public final class ClientStormWeather {
     private static final float LEVEL_STEP = 0.01F;
     /** 与原版 `isRaining()` 对齐：rainLevel 必须大于 0.2 才算「在下雨」，低于它不写回 level。 */
-    private static final float VISIBLE_RAIN_THRESHOLD = 0.2F;
+    static final float VISIBLE_RAIN_THRESHOLD = 0.2F;
     /** 与原版 `isThundering()` 对齐：thunderLevel 必须大于 0.9。 */
     private static final float AUDIBLE_THUNDER_THRESHOLD = 0.9F;
     private static float currentRain;
     private static float currentThunder;
     /** 上一 tick 是否由风暴系统接管：从接管变为不接管时，把残留雨量写回 0。 */
     private static boolean wasActive;
+    /** 上一 tick 是否处于「隔离群系 + patch 模式」（此时交还服务端逐玩家包，本类不覆盖）。 */
+    private static boolean wasIsolatedPatch;
 
     private ClientStormWeather() {}
 
@@ -45,9 +47,19 @@ public final class ClientStormWeather {
                 com.spectrum255.localizedrain.api.StormTags.STORM_ISOLATED);
         String isolatedMode = ClientStormCache.isolatedMode();
         if (isolated && "patch".equals(isolatedMode)) {
-            // 隔离群系 + patch 模式：由服务端的片天气逐玩家包驱动，客户端不要覆盖
+            // 隔离群系 + patch 模式：由服务端的片天气逐玩家包驱动，客户端不要覆盖。
+            // 但进入该分支时要清掉上一 tick 由风暴写下的残留值，否则要等服务端包到达才恢复。
+            if (!wasIsolatedPatch) {
+                wasIsolatedPatch = true;
+                currentRain = 0.0F;
+                currentThunder = 0.0F;
+                level.setRainLevel(0.0F);
+                level.setThunderLevel(0.0F);
+                level.getLevelData().setRaining(false);
+            }
             return;
         }
+        wasIsolatedPatch = false;
         // clear：隔离群系永远晴；manual：只显示手动风暴
         boolean manualOnly = isolated && "manual".equals(isolatedMode);
         boolean blockAll = isolated && !manualOnly;
@@ -77,6 +89,9 @@ public final class ClientStormWeather {
                 targetThunder = Math.max(targetThunder, (float) (typeThunder * horizontal * vertical * fade));
             }
         }
+        // 与服务端代理的数值口径对齐：原版 getThunderLevel = 雷因子 * 雨量，雷量不允许超过雨量，
+        // 否则 rain=0.4/thunder=1.0 的档案会让客户端 isThundering() 为真而雨量只有 0.4
+        targetThunder = Math.min(targetThunder, targetRain);
         // 与服务端/原版阈值对齐：低于可见阈值的目标直接归零，避免边缘出现「有粒子、HUD 却显示晴天」的弱残留。
         if (targetRain < VISIBLE_RAIN_THRESHOLD) {
             targetRain = 0.0F;
@@ -94,10 +109,30 @@ public final class ClientStormWeather {
         }
         level.setRainLevel(currentRain);
         level.setThunderLevel(currentThunder);
+        // ClientLevelData 没有 setThundering；HUD/小地图的雷暴标志由 ClientWeatherTargets 驱动
         level.getLevelData().setRaining(currentRain > VISIBLE_RAIN_THRESHOLD);
     }
 
+    /**
+     * 视觉层口径：当前隔离规则下，某个风暴是否应驱动粒子/雾/天空。
+     *
+     * <p>与 {@link #tick(Minecraft)} 的雨雷数值口径保持一致：隔离群系 + {@code clear} 一律不允许；
+     * {@code manual} 只允许手动风暴；{@code patch} 交还服务端逐玩家片天气包，视觉层也不应由风暴驱动。</p>
+     */
+    public static boolean visualsAllowed(ClientLevel level, LocalPlayer player, ClientStormCache.Storm storm) {
+        boolean isolated = level.getBiome(player.blockPosition())
+                .is(com.spectrum255.localizedrain.api.StormTags.STORM_ISOLATED);
+        if (!isolated) {
+            return true;
+        }
+        return "manual".equals(ClientStormCache.isolatedMode()) && storm.manual();
+    }
+
     private static float approach(float current, float target) {
+        if (!Float.isFinite(current) || !Float.isFinite(target)) {
+            // 任一端是 NaN 时比较/加减都不收敛；直接回到安全值，避免雨量永久卡死
+            return Float.isFinite(target) ? Mth.clamp(target, 0.0F, 1.0F) : 0.0F;
+        }
         if (current < target) {
             return Math.min(target, current + LEVEL_STEP);
         }
